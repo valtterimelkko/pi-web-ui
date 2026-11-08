@@ -127,4 +127,23 @@ describe('devin models catalogue parsing', () => {
     expect(resolveDevinLevelSwap(byId['kimi-k2-6'], 'high', entries).ok).toBe(false);
     expect(resolveDevinLevelSwap(byId['swe-2-flash-medium'], 'medium', entries)).toEqual({ ok: true, slug: 'swe-2-flash-medium' });
   });
+
+  it('review fix 3: a sibling differs ONLY in the trailing level token — another family sharing a prefix is not absorbed', () => {
+    // Verdict 3 evidence shape: swe-2-medium with swe-2-flash-high and
+    // swe-2-flash-xhigh in the catalogue must NOT yield a [medium, high,
+    // xhigh] ladder — swe-2-flash-* has a different base.
+    const variants = [
+      { model_uid: 'swe-2-medium' },
+      { model_uid: 'swe-2-high' },
+      { model_uid: 'swe-2-flash-high' },
+      { model_uid: 'swe-2-flash-xhigh' },
+    ];
+    expect(deriveDevinThinkingLevels(variants, 'swe-2-medium')).toEqual(['medium', 'high']);
+    expect(deriveDevinThinkingLevels(variants, 'swe-2-flash-xhigh')).toEqual(['high', 'xhigh']);
+    // Prefix collision (codex-style): 'x-codex-high' differs from 'x-medium'
+    // in more than the trailing token — never a level sibling.
+    const collision = [{ model_uid: 'x-medium' }, { model_uid: 'x-codex-high' }];
+    expect(deriveDevinThinkingLevels(collision, 'x-medium')).toEqual(['medium']);
+    expect(deriveDevinThinkingLevels(collision, 'x-codex-high')).toEqual(['high']);
+  });
 });

@@ -111,9 +111,14 @@ export function deriveDevinThinkingLevels(
   const levels = new Set<Level>([level]);
   for (const variant of variants) {
     if (variant.model_uid === modelUid) continue;
-    if (!variant.model_uid.startsWith(`${base}-`)) continue;
     const siblingLevel = levelOf(variant.model_uid);
-    if (siblingLevel !== null) levels.add(siblingLevel);
+    if (siblingLevel === null) continue;
+    // Review fix 3: the sibling test is EXACT equality — variant id ===
+    // base + '-' + level. A startsWith check absorbs other families that
+    // merely share the prefix (swe-2-flash-* into swe-2, 'x-codex-high' into
+    // 'x-medium'), producing levels whose swap target does not exist.
+    if (variant.model_uid !== `${base}-${siblingLevel}`) continue;
+    levels.add(siblingLevel);
   }
   return [...levels].sort((a, b) => LEVEL_ORDER[a] - LEVEL_ORDER[b]);
 }
