@@ -402,7 +402,15 @@ export class DevinService {
         // turn on the CLI's default model while the registry says otherwise.
         const desiredModel = entry.model || config.devinDefaultModel;
         if (desiredModel) {
-          await client.setConfigOption('model', desiredModel);
+          try {
+            await client.setConfigOption('model', desiredModel);
+          } catch (err) {
+            // Closure N2: never keep a child that is on the wrong model — stop and
+            // drop it, so the next turn respawns and re-applies the model.
+            this.clients.delete(sessionId);
+            client.stop();
+            throw err;
+          }
         }
       }
 
@@ -630,15 +638,15 @@ export class DevinService {
       throw new Error(`SESSION_BUSY: model changes apply between turns`);
     }
     // Ruling 01 (2026-11-08): every catalogue model is allowed; no allow-list.
-    await this.registry.upsert({ ...entry, id: entry.id, sdkType: 'devin', model: modelId });
-    // A live child applies it at once; a respawned child applies it at spawn
-    // (the service sets the model config option after start). Review fix 4:
-    // a failed set_config_option surfaces — the Internal API control maps it
-    // to 4xx; it is never swallowed into a silently different model.
+    // A live child applies it first; only a successful set is recorded, so the
+    // registry never names a model the child is not using (closure N1). A
+    // respawned child applies the registry model at spawn. A failed
+    // set_config_option surfaces — the Internal API control maps it to 4xx.
     const client = this.clients.get(sessionId);
     if (client && !client.hasExited) {
       await client.setConfigOption('model', modelId);
     }
+    await this.registry.upsert({ ...entry, id: entry.id, sdkType: 'devin', model: modelId });
     return modelId;
   }
 

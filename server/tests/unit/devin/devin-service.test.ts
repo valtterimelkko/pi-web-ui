@@ -416,6 +416,48 @@ describe('devin service', () => {
     await expect(setPromise).rejects.toThrow(/set_config_option/);
   });
 
+  it('closure N1: a rejected setModel leaves the registry model unchanged', async () => {
+    const { sessionId } = await service.createSession('/ws');
+    const completed = new Promise<void>((resolve) => {
+      void service.sendPrompt(sessionId, 'warm up', () => undefined, () => resolve());
+    });
+    const child = await waitForChild(children);
+    child.respondLast(promptResult());
+    await completed;
+    const before = (await service.getSession(sessionId))?.model;
+    const setPromise = service.setModel(sessionId, 'swe-2-flash-high');
+    await tick();
+    child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, error: { code: -32000, message: 'unknown model' } });
+    await expect(setPromise).rejects.toThrow(/set_config_option/);
+    expect((await service.getSession(sessionId))?.model).toBe(before);
+  });
+
+  it('closure N2: a model set that fails at spawn stops that child, so the retry respawns', async () => {
+    const { sessionId } = await service.createSession('/ws');
+    const first = new Promise<void>((resolve) => {
+      void service.sendPrompt(sessionId, 'hello', () => undefined, () => resolve());
+    });
+    const deadline = Date.now() + 3000;
+    while (children.length === 0 && Date.now() < deadline) await tick();
+    const child = children[0]!;
+    await tick();
+    child.respondLast({ protocolVersion: 1, agentCapabilities: { loadSession: true } });
+    await tick();
+    child.respondLast({ sessionId: 'brass-akubra', modes: { currentModeId: 'accept-edits', availableModes: [] }, configOptions: [] });
+    await tick();
+    child.respondLast({}); // bypass set OK
+    await tick();
+    child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, error: { code: -32000, message: 'unknown model' } });
+    await tick();
+    child.respondLast(promptResult());
+    await first;
+    expect(child.signals.length).toBeGreaterThan(0); // the failed child was stopped, not cached
+    void service.sendPrompt(sessionId, 'retry', () => undefined, () => undefined);
+    const retryDeadline = Date.now() + 3000;
+    while (children.length < 2 && Date.now() < retryDeadline) await tick();
+    expect(children.length).toBe(2); // a fresh child: the model is re-applied at spawn
+  });
+
   it('availableModels parses the catalogue with levels and pricing (no allow-list, ruling 01)', async () => {
     const models = await service.getAvailableModels();
     const flash = models.find((m) => m.id === 'swe-2-flash-medium');
