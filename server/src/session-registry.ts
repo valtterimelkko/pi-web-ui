@@ -136,6 +136,7 @@ export class SessionRegistryManager {
   private readonly indexByClaudeSessionId = new Map<string, RegistryEntry>();
   private readonly indexByOpencodeSessionId = new Map<string, RegistryEntry>();
   private readonly indexByCommandCodeNativeSessionId = new Map<string, RegistryEntry>();
+  private readonly indexByDevinNativeSessionId = new Map<string, RegistryEntry>();
   private linearScans = 0;
   /** Coalesced-save state: one in-flight write plus at most one trailing follow-up. */
   private inFlightSave: Promise<void> | null = null;
@@ -304,6 +305,11 @@ export class SessionRegistryManager {
     return this.indexByCommandCodeNativeSessionId.get(commandCodeNativeSessionId);
   }
 
+  async getByDevinSessionId(devinNativeSessionId: string): Promise<RegistryEntry | undefined> {
+    await this.load();
+    return this.indexByDevinNativeSessionId.get(devinNativeSessionId);
+  }
+
   /** Rebuild all exact-key indexes from the ordered entries (first match wins). */
   private rebuildIndexes(): void {
     this.indexById.clear();
@@ -311,6 +317,7 @@ export class SessionRegistryManager {
     this.indexByClaudeSessionId.clear();
     this.indexByOpencodeSessionId.clear();
     this.indexByCommandCodeNativeSessionId.clear();
+    this.indexByDevinNativeSessionId.clear();
     for (const entry of this.registry?.entries ?? []) this.addEntryToIndexes(entry);
   }
 
@@ -320,6 +327,7 @@ export class SessionRegistryManager {
     if (entry.claudeSessionId && !this.indexByClaudeSessionId.has(entry.claudeSessionId)) this.indexByClaudeSessionId.set(entry.claudeSessionId, entry);
     if (entry.opencodeSessionId && !this.indexByOpencodeSessionId.has(entry.opencodeSessionId)) this.indexByOpencodeSessionId.set(entry.opencodeSessionId, entry);
     if (entry.commandCodeNativeSessionId && !this.indexByCommandCodeNativeSessionId.has(entry.commandCodeNativeSessionId)) this.indexByCommandCodeNativeSessionId.set(entry.commandCodeNativeSessionId, entry);
+    if (entry.devinNativeSessionId && !this.indexByDevinNativeSessionId.has(entry.devinNativeSessionId)) this.indexByDevinNativeSessionId.set(entry.devinNativeSessionId, entry);
   }
 
   private removeEntryFromIndexes(entry: RegistryEntry): void {
@@ -328,6 +336,7 @@ export class SessionRegistryManager {
     if (entry.claudeSessionId && this.indexByClaudeSessionId.get(entry.claudeSessionId) === entry) this.indexByClaudeSessionId.delete(entry.claudeSessionId);
     if (entry.opencodeSessionId && this.indexByOpencodeSessionId.get(entry.opencodeSessionId) === entry) this.indexByOpencodeSessionId.delete(entry.opencodeSessionId);
     if (entry.commandCodeNativeSessionId && this.indexByCommandCodeNativeSessionId.get(entry.commandCodeNativeSessionId) === entry) this.indexByCommandCodeNativeSessionId.delete(entry.commandCodeNativeSessionId);
+    if (entry.devinNativeSessionId && this.indexByDevinNativeSessionId.get(entry.devinNativeSessionId) === entry) this.indexByDevinNativeSessionId.delete(entry.devinNativeSessionId);
   }
 
   /** After deleting an entry, a later duplicate may now be first for its keys. */
@@ -338,7 +347,8 @@ export class SessionRegistryManager {
       if (candidate.id === removed.id || candidate.path === removed.path
         || candidate.claudeSessionId === removed.claudeSessionId
         || candidate.opencodeSessionId === removed.opencodeSessionId
-        || candidate.commandCodeNativeSessionId === removed.commandCodeNativeSessionId) {
+        || candidate.commandCodeNativeSessionId === removed.commandCodeNativeSessionId
+        || candidate.devinNativeSessionId === removed.devinNativeSessionId) {
         this.addEntryToIndexes(candidate);
       }
     }
@@ -356,6 +366,7 @@ export class SessionRegistryManager {
     if (!existing && entry.claudeSessionId) existing = this.indexByClaudeSessionId.get(entry.claudeSessionId);
     if (!existing && entry.opencodeSessionId) existing = this.indexByOpencodeSessionId.get(entry.opencodeSessionId);
     if (!existing && entry.commandCodeNativeSessionId) existing = this.indexByCommandCodeNativeSessionId.get(entry.commandCodeNativeSessionId);
+    if (!existing && entry.devinNativeSessionId) existing = this.indexByDevinNativeSessionId.get(entry.devinNativeSessionId);
 
     if (entry.sdkType === 'commandcode' && entry.commandCodeNativeSessionId) {
       const duplicate = this.indexByCommandCodeNativeSessionId.get(entry.commandCodeNativeSessionId);
@@ -363,6 +374,15 @@ export class SessionRegistryManager {
         && duplicate.id !== entry.id
         && duplicate.path !== entry.path) {
         throw new Error(`Command Code native session id is already bound to ${duplicate.id}`);
+      }
+    }
+
+    if (entry.sdkType === 'devin' && entry.devinNativeSessionId) {
+      const duplicate = this.indexByDevinNativeSessionId.get(entry.devinNativeSessionId);
+      if (duplicate && duplicate.sdkType === 'devin'
+        && duplicate.id !== entry.id
+        && duplicate.path !== entry.path) {
+        throw new Error(`Devin native session id is already bound to ${duplicate.id}`);
       }
     }
 
@@ -396,6 +416,7 @@ export class SessionRegistryManager {
         claudeSessionId: entry.claudeSessionId,
         opencodeSessionId: entry.opencodeSessionId,
         commandCodeNativeSessionId: entry.commandCodeNativeSessionId,
+        devinNativeSessionId: entry.devinNativeSessionId,
         // Previously dropped on create (only carried on merge) — required by
         // contract 1.40.0 adopt-native so an adopted agy child keeps its
         // conversation id and parent linkage from the first write.

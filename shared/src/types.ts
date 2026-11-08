@@ -1,5 +1,5 @@
 // SDK Type
-export type SdkType = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
+export type SdkType = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | 'devin';
 
 export type CommandCodeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type CommandCodeModelStatus = 'runnable' | 'evidence-only' | 'unavailable';
@@ -65,7 +65,7 @@ export interface SessionInfo {
   path: string;
   cwd: string;
   name?: string;
-  sdkType: SdkType;               // SDK type ('pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode')
+  sdkType: SdkType;               // SDK type ('pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | 'devin')
   parentSessionPath?: string;
   createdAt: Date;
   lastActivity: Date;
@@ -82,6 +82,7 @@ export interface SessionInfo {
   effortCapabilityHash?: string;
   claudeSessionId?: string;         // Claude Code session ID (for claude type)
   commandCodeNativeSessionId?: string; // Command Code native resume/session id
+  devinNativeSessionId?: string; // Devin: the native session id (e.g. "brass-akubra") from `devin acp`
 }
 
 export interface ClaudeSessionInfo {

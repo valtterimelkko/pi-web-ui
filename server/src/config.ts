@@ -577,6 +577,28 @@ export interface ServerConfig {
   /** Watch ceiling per task: after this long without a receipt the task is
    *  marked completed (timedOut flag) so the banner cannot hang forever. */
   antigravityBackgroundWatchMaxMs: number;
+  /** Devin (ACP) feature gate — off by default, like COMMAND_CODE_ENABLED. */
+  devinEnabled: boolean;
+  /** Path of the `devin` CLI binary. */
+  devinExecutablePath: string;
+  /** HOME handed to every `devin acp` spawn (throwaway in tests/validation;
+   *  real home in production so sessions land in the one store — plan D1). */
+  devinHome: string;
+  /** Directory of the per-session JSONL turn store. */
+  devinSessionDir: string;
+  devinDefaultModel: string;
+  devinPromptTimeoutMs: number;
+  devinIdleTimeoutMs: number;
+  devinMaxSessions: number;
+  devinCleanupIntervalMs: number;
+  /** Idle shutdown for a live `devin acp` child: drop the process after this
+   *  long with no subscribers and no pending turns; the next turn respawns and
+   *  `session/load`-resumes. */
+  devinProcessIdleShutdownMs: number;
+  devinStallTimeoutMs: number;
+  devinMaxAttempts: number;
+  /** Native Devin sessions DB (<DEVIN_HOME>/.local/share/devin/cli/sessions.db). */
+  devinNativeSessionsDb: string;
   notificationsEnabled: boolean;
   notificationsDir: string;
   notificationsDebounceMs: number;
@@ -826,6 +848,24 @@ export const config: ServerConfig = {
   // times out. A retry reuses whatever conversation state agy already
   // resolved (or starts fresh on a first turn) — see runPromptAsync().
   antigravityMaxAttempts: parseInt(process.env.ANTIGRAVITY_MAX_ATTEMPTS || '2', 10),
+  // Devin over ACP (`devin acp`) — plan DEVIN-PARITY-PLAN §4 W1. Gate off by
+  // default like COMMAND_CODE_ENABLED.
+  devinEnabled: process.env.DEVIN_ENABLED === 'true',
+  devinExecutablePath: parseAbsolutePath(process.env.DEVIN_EXECUTABLE_PATH, '/root/.local/bin/devin', 'DEVIN_EXECUTABLE_PATH'),
+  devinHome: parseAbsolutePath(process.env.DEVIN_HOME, os.homedir(), 'DEVIN_HOME'),
+  devinSessionDir: parseAbsolutePath(process.env.DEVIN_SESSION_DIR, path.join(os.homedir(), '.pi-web-ui', 'devin-sessions'), 'DEVIN_SESSION_DIR'),
+  devinDefaultModel: process.env.DEVIN_DEFAULT_MODEL || 'swe-2-flash-medium',
+  devinPromptTimeoutMs: parseInt(process.env.DEVIN_PROMPT_TIMEOUT_MS || '3600000', 10),
+  devinIdleTimeoutMs: parseInt(process.env.DEVIN_IDLE_TIMEOUT_MS || '1800000', 10),
+  devinMaxSessions: parseInt(process.env.DEVIN_MAX_SESSIONS || '4', 10),
+  devinCleanupIntervalMs: parseInt(process.env.DEVIN_CLEANUP_INTERVAL_MS || '60000', 10),
+  // Idle `devin acp` children are shut down after this long with no pending
+  // turns and no subscribers; the next turn respawns and resumes via
+  // session/load (plan D1: lazy spawn, idle shutdown, respawn → session/load).
+  devinProcessIdleShutdownMs: parseInt(process.env.DEVIN_PROCESS_IDLE_SHUTDOWN_MS || '300000', 10),
+  devinStallTimeoutMs: parseInt(process.env.DEVIN_STALL_TIMEOUT_MS || '600000', 10),
+  devinMaxAttempts: parseInt(process.env.DEVIN_MAX_ATTEMPTS || '2', 10),
+  devinNativeSessionsDb: parseAbsolutePath(process.env.DEVIN_NATIVE_SESSIONS_DB, path.join(process.env.DEVIN_HOME || os.homedir(), '.local', 'share', 'devin', 'cli', 'sessions.db'), 'DEVIN_NATIVE_SESSIONS_DB'),
   notificationsEnabled: process.env.NOTIFICATIONS_ENABLED === 'true',
   notificationsDir: process.env.NOTIFICATIONS_DIR || path.join(os.homedir(), '.pi-web-ui', 'notifications'),
   notificationsDebounceMs: parseInt(process.env.NOTIFICATIONS_DEBOUNCE_MS || '1500', 10),
