@@ -61,8 +61,8 @@ export function createCapabilitiesRoutes(deps: CapabilitiesRoutesDeps) {
     // Devin is feature-gated (DEVIN_ENABLED, off by default): a disabled gate
     // answers enabled:false/available:false without probing the binary.
     const devinEnabled = Boolean(devinService) && config.devinEnabled;
-    const devinAvailable = devinEnabled
-      ? await devinService!.isAvailable().catch(() => false)
+    const devinAvailable = devinEnabled && devinService
+      ? await devinService.isAvailable().catch(() => false)
       : false;
     // Operator enablement is distinct from installed/healthy availability.
     // A disabled-but-installed runtime is advertised as unavailable and its

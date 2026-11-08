@@ -154,7 +154,7 @@ export type DevinLevelSwapResolution =
 export function resolveDevinLevelSwap(
   current: DevinModelEntry | undefined,
   level: string,
-  catalogue: DevinModelEntry[],
+  _catalogue: DevinModelEntry[],
 ): DevinLevelSwapResolution {
   if (!current) return { ok: false, reason: `current model unknown` };
   if (current.thinkingLevels.length === 0) {
@@ -163,6 +163,8 @@ export function resolveDevinLevelSwap(
   if (!current.thinkingLevels.includes(level)) {
     return { ok: false, reason: `thinking level "${level}" not available for "${current.id}" (available: ${current.thinkingLevels.join(', ')})` };
   }
-  const base = current.id.slice(0, current.id.length - levelOf(current.id)!.length - 1);
+  const currentLevel = levelOf(current.id);
+  if (currentLevel === null) return { ok: false, reason: `model "${current.id}" has no thinking-level axis` };
+  const base = current.id.slice(0, current.id.length - currentLevel.length - 1);
   return { ok: true, slug: `${base}-${level}` };
 }

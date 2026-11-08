@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
-import { DevinSessionStore, isTurnDone, type DevinTurn, type DevinStoredToolCall, type DevinStoredUsage, DEVIN_STORED_TOOL_LIMIT, DEVIN_STORED_TOOL_OUTPUT_LIMIT } from './devin-session-store.js';
+import { DevinSessionStore, type DevinStoredToolCall, type DevinStoredUsage, DEVIN_STORED_TOOL_LIMIT, DEVIN_STORED_TOOL_OUTPUT_LIMIT } from './devin-session-store.js';
 import { turnsToReplayEvents } from './devin-history-replay.js';
 import { DevinSessionSubscribers } from './devin-session-subscribers.js';
 import { getSessionRegistry } from '../session-registry.js';
@@ -282,7 +282,8 @@ export class DevinService {
       this.turnQueues.delete(sessionId);
       return;
     }
-    const next = queue.shift()!;
+    const next = queue.shift();
+    if (!next) return;
     if (queue.length === 0) this.turnQueues.delete(sessionId);
     const entryPromise = this.registry.get(sessionId);
     void entryPromise.then((entry) => {
@@ -371,7 +372,8 @@ export class DevinService {
       let client = this.clients.get(sessionId);
       let adapter = client ? this.adapters.get(sessionId) : undefined;
       if (!client || client.hasExited || !adapter) {
-        adapter = new AcpEventAdapter(sessionId);
+        const freshAdapter = new AcpEventAdapter(sessionId);
+        adapter = freshAdapter;
         client = new DevinAcpClient({
           cwd: (entry.cwd && entry.cwd.trim()) ? entry.cwd : process.cwd(),
           devinHome: this.devinHome ?? config.devinHome,
@@ -379,7 +381,7 @@ export class DevinService {
           ...(storedNativeId ? { resumeNativeSessionId: storedNativeId } : {}),
           ...(this.spawnFn ? { spawnFn: this.spawnFn } : {}),
           onSessionUpdate: (update) => {
-            for (const ev of adapter!.onSessionUpdate(update, Date.now())) emit(ev);
+            for (const ev of freshAdapter.onSessionUpdate(update, Date.now())) emit(ev);
           },
         });
         const started = await client.start();
@@ -407,18 +409,20 @@ export class DevinService {
         this.adapters.set(sessionId, adapter);
         this.armProcessIdleTimer(sessionId);
       } else {
-        adapter = new AcpEventAdapter(sessionId);
-        this.adapters.set(sessionId, adapter);
+        const freshAdapter = new AcpEventAdapter(sessionId);
+        adapter = freshAdapter;
+        this.adapters.set(sessionId, freshAdapter);
         client.onSessionUpdate((update) => {
-          for (const ev of adapter!.onSessionUpdate(update, Date.now())) emit(ev);
+          for (const ev of freshAdapter.onSessionUpdate(update, Date.now())) emit(ev);
         });
       }
 
       // Turn watchdog: cancel a turn that outlives the prompt timeout; the
       // pending prompt then resolves cancelled and the turn finalizes.
+      const activeClient = client;
       const watchdog = setTimeout(() => {
         tlog.warn('turn exceeded prompt timeout (%dms); cancelling', this.promptTimeoutMs);
-        client!.cancel();
+        activeClient.cancel();
       }, this.promptTimeoutMs);
       if (watchdog.unref) watchdog.unref();
 

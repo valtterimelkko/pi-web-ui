@@ -878,16 +878,17 @@ export class TransferService {
       }
 
       case 'devin': {
-        if (!this.config.devinService) {
+        const devinTarget = this.config.devinService;
+        if (!devinTarget) {
           return { success: false, error: { code: TRANSFER_ERROR_CODES.RUNTIME_UNAVAILABLE, message: 'Devin service unavailable' } };
         }
         try {
           await this.awaitTargetAcceptance((onEvent, onComplete) =>
-            this.config.devinService!.sendPrompt(targetSessionId, handoffText, onEvent, onComplete),
+            devinTarget.sendPrompt(targetSessionId, handoffText, onEvent, onComplete),
           );
           return { success: true };
         } catch (err) {
-          if (!(err instanceof TargetAcceptanceError && err.startRejected)) this.config.devinService.abort?.(targetSessionId);
+          if (!(err instanceof TargetAcceptanceError && err.startRejected)) devinTarget.abort?.(targetSessionId);
           return { success: false, error: { code: TRANSFER_ERROR_CODES.DISPATCH_FAILED, message: `Devin dispatch failed: ${err instanceof Error ? err.message : String(err)}` } };
         }
       }
