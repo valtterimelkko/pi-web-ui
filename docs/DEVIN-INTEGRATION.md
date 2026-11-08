@@ -37,7 +37,12 @@ One `devin acp` child per live session:
   `DEVIN_PROCESS_IDLE_SHUTDOWN_MS` (default 5 minutes).
 - **Respawn → resume** — the next turn spawns a fresh child and calls
   `session/load` with the native session id (Devin names them, e.g.
-  `brass-akubra`), so history and context survive the restart. Pi Web UI's
+  `brass-akubra`), so history and context survive the restart. Review fix
+  (2026-11-08): `session/update` notifications that arrive during
+  `session/load` (the history replay) are dropped — they never stream as
+  live events and never merge old replies into the new turn's finalText —
+  and the turn adapter is reset immediately before each `session/prompt`.
+  Pi Web UI's
   own per-session JSONL turn store
   (`DEVIN_SESSION_DIR`, default `~/.pi-web-ui/devin-sessions/`) holds the
   replayable turns.
@@ -67,7 +72,11 @@ creation). Agent→client requests are answered by policy:
 - anything else → JSON-RPC method-not-found (`-32601`).
 
 Unknown agent notifications (`_cognition.ai/*`) are ignored safely and logged
-at debug.
+at debug. Review fix (2026-11-08): a spawn error (e.g. ENOENT) is handled —
+pending requests fail, the client marks itself exited — and any handshake
+failure or timeout (initialize / session/new / session/load /
+set_config_option) stops the spawned child before the error propagates, so a
+failed start never leaks an orphan `devin acp` process.
 
 ## Events
 
@@ -92,18 +101,26 @@ summary).
   the CLI's raw price text) so callers can see which models are free; it is
   information, never a gate.
 - **Thinking levels are sibling-model swaps** (plan D4): a model's levels are
-  the catalogue ids differing only in the trailing token among
-  `low|medium|high|xhigh|max`. Speed variants (`-fast`, `-lightning`,
+  the catalogue ids that differ ONLY in the trailing token among
+  `low|medium|high|xhigh|max` — exact `base-<level>` equality, so another
+  family sharing a prefix (`swe-2-flash-*` vs `swe-2-*`, `x-codex-high` vs
+  `x-medium`) is never absorbed into the ladder. Speed variants (`-fast`,
+  `-lightning`,
   `-priority`) and `fusion-*` combos are separate models, never levels.
   Changing level while a turn runs refuses with 409 `SESSION_BUSY`; when
-  idle it sets the sibling id as the session's model.
+  idle it sets the sibling id as the session's model. Review fix
+  (2026-11-08): a failed `session/set_config_option` for `model` surfaces —
+  it fails the turn at spawn (clear error, error turn persisted) and
+  rejects `set_model` when idle (the Internal API control answers 4xx) —
+  never a silent turn on the CLI's default model.
 
 ## Follow-up and steer
 
 A follow-up on a busy session queues FIFO and runs as the next turn
 (Antigravity semantics). There is no mid-run join in the ACP protocol, so
 steer is refused honestly with 409 `SESSION_BUSY` — send it as a follow-up
-instead.
+instead. Review fix (2026-11-08): `abort` also clears that session's queued
+follow-ups — abort stops everything pending.
 
 ## Permissions
 
@@ -121,6 +138,13 @@ builds its session list from this endpoint. The database is opened
 busy WAL is retried briefly and then fails open with an empty list. Registry
 sessions surface the native id (`devinNativeSessionId` / `nativeSessionId`)
 for joining.
+
+## Session lifecycle cleanup
+
+Devin sessions join the hygiene funnel like the other runtimes: archiving a
+session unpins it through the devin service, and retention deletion removes
+its turn-store JSONL (`DEVIN_SESSION_DIR`) with the registry record (review
+fix 2026-11-08, mirroring the antigravity branch in `session-cleanup.ts`).
 
 ## Configuration
 
