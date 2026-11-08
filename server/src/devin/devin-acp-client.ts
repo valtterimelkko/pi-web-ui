@@ -285,6 +285,7 @@ export class DevinAcpClient {
 
   /** session/cancel (idempotent; the pending prompt resolves 'cancelled'). */
   cancel(): void {
+    logger.info('cancel requested: nativeId=%s exited=%s hasChild=%s', this.nativeSessionId, this.hasExited, Boolean(this.child?.stdin));
     if (!this.nativeSessionId || this.hasExited) return;
     this.write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this.nativeSessionId } });
   }

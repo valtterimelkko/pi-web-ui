@@ -3317,6 +3317,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         events = await opencodeService.getReplayEvents(sessionId);
       } else if (entry.sdkType === 'antigravity') {
         events = await antigravityService.getReplayEvents(sessionId);
+      } else if (entry.sdkType === 'devin') {
+        events = (await devinService?.getReplayEvents(sessionId)) ?? [];
       } else if (entry.sdkType === 'pi') {
         // Pi has no native NormalizedEvent history; build one from the
         // session JSONL via the source adapter.
@@ -7938,6 +7940,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
     if (entry.sdkType === 'antigravity') {
       const events = await antigravityService.getReplayEvents(entry.id);
+      const { replayEventsToVisibleItems, buildVisibleTranscript } = await import('../../session-transfer/visible-transcript.js');
+      return {
+        transcript: buildVisibleTranscript(replayEventsToVisibleItems(events), source, scope),
+      };
+    }
+    if (entry.sdkType === 'devin') {
+      const events = (await devinService?.getReplayEvents(entry.id)) ?? [];
       const { replayEventsToVisibleItems, buildVisibleTranscript } = await import('../../session-transfer/visible-transcript.js');
       return {
         transcript: buildVisibleTranscript(replayEventsToVisibleItems(events), source, scope),

@@ -554,6 +554,7 @@ export class DevinService {
 
   abort(sessionId: string): void {
     const client = this.clients.get(sessionId);
+    logger.info('abort: sessionId=%s hasClient=%s', sessionId, Boolean(client));
     if (client) {
       client.cancel();
     }
