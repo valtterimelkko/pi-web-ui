@@ -11,7 +11,13 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@pi-web-ui/shared": ["../shared/dist/index.d.ts"],
+      "@pi-web-ui/session-ui": ["../packages/session-ui/src/index.ts"],
+      "@pi-web-ui/session-ui/*": ["../packages/session-ui/src/*"]
+    }
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]

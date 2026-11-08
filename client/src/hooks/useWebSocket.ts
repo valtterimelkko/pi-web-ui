@@ -179,7 +179,7 @@ export function useWebSocket() {
     return sendMessage({ type: 'goal_control', sessionId, action });
   }, [sendMessage]);
 
-  const createNewSession = useCallback((cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode', model?: string, thinkingLevel?: string, effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max', requestId?: string) => {
+  const createNewSession = useCallback((cwd?: string, sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | 'devin', model?: string, thinkingLevel?: string, effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max', requestId?: string) => {
     return sendMessage({ type: 'new_session', cwd, sdkType: sdkType || 'pi', model, thinkingLevel, effort, ...(requestId ? { requestId } : {}) });
   }, [sendMessage]);
 

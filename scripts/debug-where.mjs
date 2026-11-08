@@ -45,6 +45,7 @@ export function findSessionEntry(entries, query) {
     || entry.opencodeSessionId === query
     || entry.antigravityConversationId === query
     || entry.commandCodeNativeSessionId === query
+    || entry.devinNativeSessionId === query
   )) ?? null;
 }
 
@@ -167,6 +168,24 @@ export function buildSessionDebugReport(entry, opts = {}) {
     return lines.join('\n');
   }
 
+  if (entry.sdkType === 'devin') {
+    lines.push(
+      '  - Devin log lines:           sudo journalctl -u pi-web-ui -f | grep -i devin',
+      '',
+      'Session files and state:',
+      `  - Devin session JSONL:       ${path.join(homeDir, '.pi-web-ui', 'devin-sessions', `${entry.id}.jsonl`)}`,
+      `  - Native session ID:         ${entry.devinNativeSessionId || 'Unavailable (missing devinNativeSessionId)'}`,
+      `  - Devin sessions DB (READ-ONLY): ${path.join(process.env.DEVIN_HOME || homeDir, '.local', 'share', 'devin', 'cli', 'sessions.db')}`,
+      `  - Devin CLI logs:            ${path.join(process.env.DEVIN_HOME || homeDir, '.local', 'share', 'devin', 'cli', 'logs', 'devin_*.log')}`,
+      '',
+      'Useful checks:',
+      '  - devin binary:               devin --version',
+      '  - devin models:               devin models list --format json',
+      '  - REST models:                curl "http://localhost:<server-port>/api/models?sdkType=devin"',
+    );
+    return lines.join('\n');
+  }
+
   lines.push('', 'No runtime-specific hints available for this entry.');
   return lines.join('\n');
 }
@@ -194,6 +213,7 @@ export function buildSessionEvidenceJson(entry, opts = {}) {
     ...(entry.opencodeSessionId ? { opencodeSessionId: entry.opencodeSessionId } : {}),
     ...(entry.antigravityConversationId ? { antigravityConversationId: entry.antigravityConversationId } : {}),
     ...(entry.commandCodeNativeSessionId ? { commandCodeNativeSessionId: entry.commandCodeNativeSessionId } : {}),
+    ...(entry.devinNativeSessionId ? { devinNativeSessionId: entry.devinNativeSessionId } : {}),
   };
 
   let runtime = {};
@@ -227,6 +247,13 @@ export function buildSessionEvidenceJson(entry, opts = {}) {
       normalizedEventJournal: path.join(homeDir, '.pi-web-ui', 'command-code', 'events', `${entry.id}.jsonl`),
       commandCodeNativeSessionId: entry.commandCodeNativeSessionId ?? '',
       transcriptSource: 'Pi Web UI normalized Command Code journal',
+    };
+  } else if (entry.sdkType === 'devin') {
+    runtime = {
+      sessionJsonl: path.join(homeDir, '.pi-web-ui', 'devin-sessions', `${entry.id}.jsonl`),
+      nativeSessionId: entry.devinNativeSessionId ?? '',
+      sessionsDb: path.join(process.env.DEVIN_HOME || homeDir, '.local', 'share', 'devin', 'cli', 'sessions.db'),
+      transcriptSource: 'Pi Web UI normalized Devin turn store',
     };
   } else if (entry.sdkType === 'antigravity') {
     runtime = {

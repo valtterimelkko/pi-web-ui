@@ -452,7 +452,7 @@ export interface Session {
   messageCount: number;
   cwd: string;
   name?: string;
-  sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';  // optional for backward compatibility
+  sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | 'devin';  // optional for backward compatibility
   /** Registry provenance (plan Phase 3): 'native-discovered' = indexed from
    *  disk by the SessionWatcher / Resume-CLI scan, never created in the UI. */
   origin?: 'browser' | 'internal-api' | 'native-discovered';
@@ -604,7 +604,7 @@ export type WorkerStatus = 'spawning' | 'ready' | 'streaming' | 'idle' | 'error'
 interface SessionState {
   sessions: Session[];
   currentSessionId: string | null;
-  currentSessionSdkType: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | null;
+  currentSessionSdkType: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | 'devin' | null;
   currentModel: string | null;
   currentThinkingLevel: string | null;
   currentEffort: CommandCodeEffort | null;
@@ -698,6 +698,11 @@ interface SessionState {
   commandCodeEnabled: boolean;
   commandCodeError: string | null;
   commandCodeModels: CommandCodeModelInfo[];
+
+  // Devin availability (ACP; DEVIN_ENABLED gate)
+  devinAvailable: boolean;
+  devinEnabled: boolean;
+  devinError: string | null;
   /** Outcome of the most recent session-creation request, correlated by requestId. */
   sessionCreation: { status: 'idle' | 'created' | 'error'; requestId?: string; error?: string };
 
@@ -768,6 +773,7 @@ interface SessionState {
   // Antigravity availability
   setAntigravityAvailable: (available: boolean, error?: string | null) => void;
   setCommandCodeAvailable: (available: boolean, enabled: boolean, models: CommandCodeModelInfo[], error?: string | null) => void;
+  setDevinAvailable: (available: boolean, enabled: boolean, error?: string | null) => void;
 
   // WebSocket event handlers
   handleServerMessage: (message: unknown) => void;
@@ -839,6 +845,10 @@ export const useSessionStore = create<SessionState>()(
       commandCodeEnabled: false,
       commandCodeError: null,
       commandCodeModels: [],
+
+      devinAvailable: false,
+      devinEnabled: false,
+      devinError: null,
       sessionCreation: { status: 'idle' },
 
       // Worker status tracking implementation
@@ -882,6 +892,7 @@ export const useSessionStore = create<SessionState>()(
         commandCodeModels: models,
         commandCodeError: error,
       }),
+      setDevinAvailable: (available, enabled, error = null) => set({ devinAvailable: available, devinEnabled: enabled, devinError: error }),
 
       setOpencodeAgentMode: (sessionId, mode) => set((state) => ({
         opencodeAgentModes: { ...state.opencodeAgentModes, [sessionId]: mode },
@@ -1751,7 +1762,7 @@ export const useSessionStore = create<SessionState>()(
         switch (msg.type) {
           case 'sessions_list': {
             // Deduplicate sessions by path (path is the stable identifier)
-            const rawSessions = (msg.sessions as Array<Session & { sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' }>) || [];
+            const rawSessions = (msg.sessions as Array<Session & { sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | 'devin' }>) || [];
             const seenPaths = new Set<string>();
             const dedupedSessions = rawSessions
               .filter((session) => {
@@ -1772,7 +1783,7 @@ export const useSessionStore = create<SessionState>()(
           }
 
           case 'session_created': {
-            const createdMsg = msg as unknown as { requestId?: string; sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode'; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort };
+            const createdMsg = msg as unknown as { requestId?: string; sessionId: string; sessionPath: string; sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | 'devin'; model?: string; thinkingLevel?: string; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort };
             set({ 
               currentSessionId: createdMsg.sessionId,
               currentSessionSdkType: createdMsg.sdkType ?? null,
@@ -1838,7 +1849,7 @@ export const useSessionStore = create<SessionState>()(
           case 'session_switched': {
             const switchMsg = msg as unknown as {
               sessionId: string;
-              sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode';
+              sdkType?: 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | 'devin';
               model?: string;
               thinkingLevel?: string;
               effort?: CommandCodeEffort;
@@ -2538,6 +2549,12 @@ export const useSessionStore = create<SessionState>()(
               commandCodeMsg.models ?? [],
               commandCodeMsg.error ?? null,
             );
+            break;
+          }
+
+          case 'devin_available': {
+            const devinMsg = msg as unknown as { available: boolean; enabled: boolean; error: string | null };
+            get().setDevinAvailable(devinMsg.available, devinMsg.enabled, devinMsg.error ?? null);
             break;
           }
 

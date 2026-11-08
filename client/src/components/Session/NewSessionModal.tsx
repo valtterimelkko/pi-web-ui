@@ -114,6 +114,9 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const [pathInput, setPathInput] = useState('/root');
   const [sdkType, setSdkType] = useState<SdkType>('pi');
   const [piModels, setPiModels] = useState<PiModelEntry[]>([]);
+  const [devinModels, setDevinModels] = useState<Array<{ id: string; name?: string; pricing?: { free: boolean; raw: string; costTier?: string }; thinkingLevels?: string[] }>>([]);
+  const [devinModelsLoading, setDevinModelsLoading] = useState(false);
+  const [devinModel, setDevinModel] = useState<string>('');
   const [piModel, setPiModel] = useState('');
   const [piModelsLoading, setPiModelsLoading] = useState(false);
   const [claudeModels, setClaudeModels] = useState<ClaudeModelEntry[]>([]);
@@ -141,6 +144,9 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const commandCodeEnabled = useSessionStore(s => s.commandCodeEnabled);
   const commandCodeAvailable = useSessionStore(s => s.commandCodeAvailable);
   const commandCodeModels = useSessionStore(s => s.commandCodeModels ?? []);
+  const devinEnabled = useSessionStore(s => s.devinEnabled);
+  const devinAvailable = useSessionStore(s => s.devinAvailable);
+  const devinError = useSessionStore(s => s.devinError);
   const topRecentFolders = getRecentFolders(8);
 
   const fetchDirectories = async (path: string) => {
@@ -210,6 +216,28 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
     return () => { cancelled = true; };
   }, [isOpen, sdkType, piModels.length]);
 
+  // Fetch the Devin catalogue when the Devin session type is chosen. The
+  // picker shows EVERY model (ruling 01: no allow-list); each entry's pricing
+  // flags what the CLI reports as free.
+  useEffect(() => {
+    if (!isOpen || sdkType !== 'devin' || devinModels.length > 0) return;
+    let cancelled = false;
+    setDevinModelsLoading(true);
+    api.get('/api/models?sdkType=devin')
+      .then((resp) => {
+        if (!cancelled) setDevinModels((resp as { models?: Array<{ id: string; name?: string; pricing?: { free: boolean; raw: string; costTier?: string }; thinkingLevels?: string[] }> }).models || []);
+      })
+      .catch((err) => console.error('Failed to fetch Devin models:', err))
+      .finally(() => setDevinModelsLoading(false));
+    return () => { cancelled = true; };
+  }, [isOpen, sdkType, devinModels.length]);
+
+  useEffect(() => {
+    if (sdkType !== 'devin') return;
+    if (devinModel && devinModels.some((m) => m.id === devinModel)) return;
+    setDevinModel(devinModels.find((m) => m.pricing?.free)?.id ?? devinModels[0]?.id ?? '');
+  }, [sdkType, devinModels, devinModel]);
+
   // Fetch Claude models/profiles when the Claude session type is chosen so the
   // user can pick a backend/provider profile (e.g. GLM 5.3 via SDK) before the
   // session opens. Profiles surface as `profile:<id>` model entries.
@@ -277,6 +305,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const selectedModelArg = () => {
     if (sdkType === 'pi') return piModel || undefined;
     if (sdkType === 'commandcode') return selectedCommandCodeModel?.id || commandCodeModels[0]?.id;
+    if (sdkType === 'devin') return devinModel || devinModels[0]?.id;
     return claudeModelArg();
   };
 
@@ -493,6 +522,29 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
               </span>
             </button>
 
+            {/* Devin option (ACP) */}
+            <button
+              onClick={() => devinAvailable && devinEnabled && setSdkType('devin')}
+              disabled={!devinAvailable || !devinEnabled}
+              aria-pressed={sdkType === 'devin'}
+              title={!devinEnabled ? 'Devin runtime is disabled (DEVIN_ENABLED)' : (!devinAvailable ? (devinError || 'Devin is not currently available') : undefined)}
+              className={`flex flex-col items-start p-2 sm:p-2.5 rounded-xl border text-left transition-all ${
+                !devinAvailable || !devinEnabled
+                  ? 'opacity-40 border-outline-subtle dark:border-outline-subtle-dark bg-surface-subtle/40 dark:bg-surface-dark-subtle/40 text-content-muted dark:text-content-muted-dark cursor-not-allowed'
+                  : sdkType === 'devin'
+                  ? 'border-amber-500 bg-amber-500/10 text-content-primary dark:text-content-primary-dark ring-1 ring-amber-500/30'
+                  : 'border-outline-default dark:border-outline-default-dark bg-surface-subtle dark:bg-surface-dark-subtle text-content-secondary dark:text-content-secondary-dark hover:border-outline-strong dark:hover:border-outline-strong-dark'
+              }`}
+            >
+              <span className="text-sm font-medium">Devin</span>
+              <span className="text-xs text-content-muted dark:text-content-muted-dark mt-0.5 hidden sm:inline">
+                {devinAvailable && devinEnabled ? 'SWE-2 • Cognition (ACP)' : (devinError || 'Not available')}
+              </span>
+              <span className="text-xs text-content-muted dark:text-content-muted-dark mt-0.5 sm:hidden">
+                {devinAvailable && devinEnabled ? 'SWE-2' : 'Unavailable'}
+              </span>
+            </button>
+
             {/* Command Code browser option */}
             <button
               onClick={() => commandCodeAvailable && commandCodeEnabled && setSdkType('commandcode')}
@@ -544,6 +596,42 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
           )}
 
           {/* Command Code model + native effort selector */}
+          {/* Devin model selector (whole catalogue; pricing is informational) */}
+          {sdkType === 'devin' && (
+            <div className="mt-2 space-y-2" data-testid="devin-model-selector">
+              <div>
+                <p className="text-xs font-medium text-content-secondary dark:text-content-secondary-dark mb-1.5">Model</p>
+                {devinModelsLoading ? (
+                  <div className="flex items-center gap-2 text-xs text-content-muted dark:text-content-muted-dark py-2">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading Devin catalogue…
+                  </div>
+                ) : (
+                  <select
+                    value={devinModel}
+                    onChange={(e) => setDevinModel(e.target.value)}
+                    data-testid="devin-model-select"
+                    className="w-full px-3 py-2 bg-surface-subtle dark:bg-surface-dark-subtle rounded-xl text-sm text-content-primary dark:text-content-primary-dark border border-outline-default dark:border-outline-default-dark focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500/30"
+                  >
+                    {devinModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name || model.id}{model.pricing?.free ? ' • free' : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              {(() => {
+                const selected = devinModels.find((m) => m.id === devinModel);
+                if (!selected || (selected.thinkingLevels ?? []).length === 0) return null;
+                return (
+                  <p className="text-xs text-content-muted dark:text-content-muted-dark">
+                    Thinking levels for this model: {(selected.thinkingLevels ?? []).join(', ')} — switch after creation from the session header.
+                  </p>
+                );
+              })()}
+            </div>
+          )}
+
           {sdkType === 'commandcode' && (
             <div className="mt-2 space-y-2" data-testid="commandcode-model-selector">
               <div>

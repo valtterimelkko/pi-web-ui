@@ -1,4 +1,4 @@
-export type RuntimeSdkType = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | null | undefined;
+export type RuntimeSdkType = 'pi' | 'claude' | 'opencode' | 'antigravity' | 'commandcode' | 'devin' | null | undefined;
 
 export function isPiSlashCommandAllowedWhileStreaming(
   draft: string,
@@ -52,7 +52,7 @@ export function canSendStreamingText(
  * The composer forces follow-up delivery and shows a single Queue affordance.
  */
 export function streamingComposeIsQueueOnly(sdkType: RuntimeSdkType): boolean {
-  return sdkType === 'antigravity';
+  return sdkType === 'antigravity' || sdkType === 'devin';
 }
 
 export function shouldPauseGoalOnStop(
