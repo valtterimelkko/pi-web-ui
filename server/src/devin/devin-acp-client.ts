@@ -119,6 +119,20 @@ export class DevinAcpClient {
       }
       this.pending.clear();
     });
+    child.on('error', (err) => {
+      // Review fix 2a: a spawn failure (ENOENT/EACCES on the binary) must
+      // never surface as an uncaught 'error' event (it would graceful-shutdown
+      // the whole control plane). Mark exited and fail pending requests.
+      this.hasExited = true;
+      this.exitCode = null;
+      const error = err instanceof Error ? err : new Error(String(err));
+      for (const [, pending] of this.pending) {
+        clearTimeout(pending.timer);
+        pending.reject(error);
+      }
+      this.pending.clear();
+      logger.warn('devin acp process error: %s', error.message);
+    });
     child.stdout?.setEncoding?.('utf8');
     child.stdout?.on('data', (chunk: string) => {
       this.lineBuffer += chunk;
@@ -138,47 +152,54 @@ export class DevinAcpClient {
 
     // ACP v1 handshake — fs/terminal client capabilities false (we never serve
     // files or terminals to the agent; the session request_permission answer
-    // and bypass mode cover tool permissions).
-    const init = await this.request('initialize', {
-      protocolVersion: 1,
-      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-      clientInfo: { name: 'pi-web-ui', version: '1.0.0' },
-    }, this.options.initTimeoutMs ?? INIT_TIMEOUT_MS);
-    if (init.error) {
-      throw new Error(`devin acp initialize failed: ${init.error.message}`);
-    }
+    // and bypass mode cover tool permissions). Review fix 2: the whole
+    // handshake (initialize / session/new / session/load /
+    // set_config_option) is wrapped — any failure or timeout stops the child
+    // before rethrowing, so a failed start never leaks the spawned process.
+    try {
+      const init = await this.request('initialize', {
+        protocolVersion: 1,
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+        clientInfo: { name: 'pi-web-ui', version: '1.0.0' },
+      }, this.options.initTimeoutMs ?? INIT_TIMEOUT_MS);
+      if (init.error) {
+        throw new Error(`devin acp initialize failed: ${init.error.message}`);
+      }
 
-    if (this.options.resumeNativeSessionId) {
-      this.loadPending = true;
-      try {
-        const loaded = await this.request('session/load', {
-          sessionId: this.options.resumeNativeSessionId,
+      if (this.options.resumeNativeSessionId) {
+        this.loadPending = true;
+        try {
+          const loaded = await this.request('session/load', {
+            sessionId: this.options.resumeNativeSessionId,
+            cwd: this.options.cwd,
+            mcpServers: [],
+          }, this.options.initTimeoutMs ?? INIT_TIMEOUT_MS);
+          if (loaded.error) {
+            throw new Error(`devin acp session/load failed: ${loaded.error.message}`);
+          }
+          this.nativeSessionId = this.options.resumeNativeSessionId;
+        } finally {
+          this.loadPending = false;
+        }
+      } else {
+        const created = await this.request('session/new', {
           cwd: this.options.cwd,
           mcpServers: [],
         }, this.options.initTimeoutMs ?? INIT_TIMEOUT_MS);
-        if (loaded.error) {
-          throw new Error(`devin acp session/load failed: ${loaded.error.message}`);
+        if (created.error || !created.result || typeof (created.result as { sessionId?: unknown }).sessionId !== 'string') {
+          throw new Error(`devin acp session/new failed: ${created.error?.message ?? 'no sessionId in result'}`);
         }
-        this.nativeSessionId = this.options.resumeNativeSessionId;
-      } finally {
-        this.loadPending = false;
+        this.nativeSessionId = (created.result as { sessionId: string }).sessionId;
       }
-    } else {
-      const created = await this.request('session/new', {
-        cwd: this.options.cwd,
-        mcpServers: [],
-      }, this.options.initTimeoutMs ?? INIT_TIMEOUT_MS);
-      if (created.error || !created.result || typeof (created.result as { sessionId?: unknown }).sessionId !== 'string') {
-        throw new Error(`devin acp session/new failed: ${created.error?.message ?? 'no sessionId in result'}`);
-      }
-      this.nativeSessionId = (created.result as { sessionId: string }).sessionId;
-    }
 
-    // Plan D6: children run bypass mode. The mode config option exists on
-    // every session (live-validated availableModes include `bypass`).
-    await this.setConfigOption('mode', 'bypass').catch((err) => {
-      logger.warn('bypass mode set failed (session continues in its default mode): %s', err instanceof Error ? err.message : String(err));
-    });
+      // Plan D6: children run bypass mode. The mode config option exists on
+      // every session (live-validated availableModes include `bypass`). A
+      // failure here is a handshake failure: stop the child and rethrow.
+      await this.setConfigOption('mode', 'bypass');
+    } catch (error) {
+      this.stop();
+      throw error;
+    }
 
     return { nativeSessionId: this.nativeSessionId };
   }

@@ -50,13 +50,14 @@ class FakeChild extends EventEmitter {
   close(code = 0): void { this.emit('exit', code, null); }
 }
 
-function makeClient(opts: { resumeId?: string; cwd?: string } = {}) {
+function makeClient(opts: { resumeId?: string; cwd?: string; initTimeoutMs?: number } = {}) {
   const children: FakeChild[] = [];
   const client = new DevinAcpClient({
     cwd: opts.cwd ?? '/ws',
     devinHome: '/throwaway-home',
     executablePath: '/root/.local/bin/devin',
     ...(opts.resumeId ? { resumeNativeSessionId: opts.resumeId } : {}),
+    ...(opts.initTimeoutMs !== undefined ? { initTimeoutMs: opts.initTimeoutMs } : {}),
     spawnFn: ((file: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
       const child = new FakeChild(options.env ?? {});
       // Wrap stdin writes to record the last request id.
@@ -249,5 +250,43 @@ describe('devin ACP client', () => {
     await expect(setPromise).resolves.toBeUndefined();
     const set = child.sent().find((m) => m.method === 'session/set_config_option' && m.params?.configId === 'model');
     expect(set?.params).toMatchObject({ sessionId: 'brass-akubra', configId: 'model', value: 'swe-2-flash-high' });
+  });
+
+  it('review fix 2a: a spawn error (ENOENT) rejects start() without an uncaught exception and rejects pending requests', async () => {
+    const client = new DevinAcpClient({
+      cwd: '/ws',
+      devinHome: '/throwaway-home',
+      executablePath: '/nonexistent/devin',
+      spawnFn: (() => {
+        const child = new FakeChild({});
+        // What node:child_process does when the binary cannot spawn.
+        process.nextTick(() => child.emit('error', Object.assign(new Error('spawn /nonexistent/devin ENOENT'), { code: 'ENOENT' })));
+        return child as unknown as ReturnType<typeof import('node:child_process').spawn>;
+      }) as unknown as typeof import('node:child_process').spawn,
+    });
+    await expect(client.start()).rejects.toThrow(/ENOENT/);
+    expect(client.hasExited).toBe(true);
+  });
+
+  it('review fix 2b: a handshake timeout kills the spawned child instead of leaking it', async () => {
+    const { client, children } = makeClient({ initTimeoutMs: 50 });
+    const startPromise = client.start();
+    await Promise.resolve();
+    const child = children[0]!;
+    // Never answer initialize → the init request times out.
+    await expect(startPromise).rejects.toThrow(/timed out/);
+    expect(child.signals).toContain('SIGTERM');
+  });
+
+  it('review fix 2c: a session/new error response stops the child and rejects start()', async () => {
+    const { client, children } = makeClient();
+    const startPromise = client.start();
+    await Promise.resolve();
+    const child = children[0]!;
+    child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    child.writeStdout({ jsonrpc: '2.0', id: child.lastRequestId, error: { code: -32000, message: 'no session' } });
+    await expect(startPromise).rejects.toThrow(/session\/new failed/);
+    expect(child.signals).toContain('SIGTERM');
   });
 });
