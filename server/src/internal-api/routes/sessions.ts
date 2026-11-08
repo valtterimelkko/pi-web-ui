@@ -1334,7 +1334,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     // targets refuse honestly.
     let dispatchMode: PromptMode;
     if (!busy) dispatchMode = 'prompt';
-    else if (mode === 'follow_up' && runtime === 'pi') dispatchMode = 'follow_up';
+    // devin-parity C3 (contract 1.69.0): Devin keeps a FIFO follow-up queue
+    // drained between turns (the prompt path already queues there), so a wake
+    // into a busy managed Devin parent queues instead of being lost.
+    else if (mode === 'follow_up' && (runtime === 'pi' || runtime === 'devin')) dispatchMode = 'follow_up';
     else return { status: 'failed', errorCode: ErrorCode.SESSION_BUSY };
     return dispatchWatchWakeReceipted({
       targetSessionId,

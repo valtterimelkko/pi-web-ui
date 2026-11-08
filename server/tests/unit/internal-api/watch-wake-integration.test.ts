@@ -267,6 +267,50 @@ describe('watch wake — full chain: firing → wake dispatch → run receipt (i
     expect(watch.wakeAttempts).toMatchObject([{ status: 'dispatched', deliveryKind: 'deferred-follow-up' }]);
   });
 
+  it('devin-parity C3: a busy Devin parent gets the wake queued as a follow-up, not refused', async () => {
+    // Live finding (lane C3, 2026-11-08): a wake into a busy managed Devin
+    // parent failed SESSION_BUSY twice and was lost, although the prompt path
+    // queues follow_ups for Devin (FIFO drained between turns).
+    const devinParent = { ...parentEntry, sdkType: 'devin' };
+    registry.get.mockImplementation(async (id: string) => (id === 'child-1' ? childEntry : id === 'parent-1' ? devinParent : undefined));
+    const followUp = vi.fn(async () => true);
+    const devinService = {
+      isRunning: vi.fn(() => true),
+      followUp,
+      sendPrompt: vi.fn(async () => undefined),
+      getServedModel: vi.fn(async () => 'swe-2-flash-medium'),
+      isAvailable: vi.fn(async () => true),
+    };
+    const devinRoutes = createSessionRoutes({
+      claudeService: claudeService as never,
+      opencodeService: {} as never,
+      antigravityService: {} as never,
+      devinService: devinService as never,
+      multiSessionManager: multiSessionManager as never,
+      sessionRegistry: registry as never,
+      piService: {} as never,
+      internalClientId: 'test',
+      watchDir: path.join(dir, 'watches-devin'),
+      runReceiptManager: runReceipts,
+    });
+
+    await devinRoutes.handleRegisterWatch(
+      createJsonReq('POST', '/api/v1/sessions/child-1/watch', {
+        conditions: [{ type: 'event_type', eventType: 'agent_end' }],
+        onFire: { type: 'prompt', targetSessionId: 'parent-1', message: 'child done' },
+      }),
+      createMockRes(), 'child-1',
+    );
+    for (const o of observers) o(ev('agent_end'));
+    await flush();
+
+    const get = createMockRes();
+    await devinRoutes.handleGetWatch(createJsonReq('GET', '/api/v1/sessions/child-1/watch'), get, 'child-1', new URLSearchParams());
+    const watch = JSON.parse(get.body);
+    expect(watch.wakeAttempts).toMatchObject([{ status: 'dispatched', deliveryKind: 'deferred-follow-up' }]);
+    expect(followUp).toHaveBeenCalledWith('parent-1', 'child done', expect.any(Function), expect.any(Function));
+  });
+
   it('promotes idle steer to a receipted prompt turn', async () => {
     await routes.handleRegisterWatch(
       createJsonReq('POST', '/api/v1/sessions/child-1/watch', {
