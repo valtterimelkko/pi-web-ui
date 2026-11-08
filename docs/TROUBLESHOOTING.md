@@ -52,6 +52,7 @@ without prompt text or credentials. `debug:where` reads `~/.pi-web-ui/session-re
 | OpenCode native session id | `entry.opencodeSessionId` |
 | Antigravity conversation id | `entry.antigravityConversationId` |
 | Command Code native session id | `entry.commandCodeNativeSessionId` |
+| Devin native session id (e.g. `brass-akubra`) | `entry.devinNativeSessionId` |
 
 Keep the resolved **internal id**, runtime, and any native id from the report. The internal id is the safest correlation key for diagnostics and run receipts. When no registry entry matches and the query is an Antigravity conversation UUID, the locator also probes both native Antigravity conversation stores on disk (agy CLI and desktop-app roots, contract 1.42.0) and reports which surface owns it together with the durable artefact paths — a desktop-app session id is findable this way even though it never entered the registry. If the session belongs to a disposable validation server, point the locator at that server's registry with `--registry <validation-dir>/session-registry.json`; use the validation server's printed socket/token and file roots for subsequent evidence calls. `--registry` changes the lookup file, not the helper's home-directory path hints, so for disposable runs treat the validation directory and the registry entry's actual `path` as authoritative.
 
@@ -231,6 +232,7 @@ If the Internal API is unavailable:
 | **Antigravity (agy)** | `~/.pi-web-ui/antigravity-sessions/<session-id>.jsonl` (Pi-owned JSONL turn log) plus per-turn logs under `~/.pi-web-ui/antigravity-sessions/agy-logs/`; goal-control ledger at `~/.pi-web-ui/antigravity-sessions/goal-control/<session-id>.json` (contract 1.38.0) | `journalctl -u pi-web-ui -f \| grep -i antigravity` | Each turn is one JSON line: prompt, response, model, conversationId (from the stream), and — stream turns since contract 1.37.0 — usage/numTurns/agyStatus/tools. Legacy rows may carry `rawStdoutLength`; `agy-logs/` holds historical text-mode run logs only. |
 | **Antigravity conversation state** | agy CLI: `~/.gemini/antigravity-cli/conversations/<uuid>.db`; desktop app: `~/.gemini/antigravity/conversations/<uuid>.db` (SQLite, runtime-owned; disjoint stores with identical layout) | `agy --version`, `agy models`, `npm run debug:where -- <conversation-uuid>` | The conversation UUID in the JSONL must match a `.db` file in one of the two roots for continuity to work. CLI-spawned sessions land in the `-cli` root; desktop-app conversations never enter the CLI store. Native discovery and adopt-native (contract 1.42.0) scan both roots, and `debug:where` probes both for unmatched conversation UUIDs. |
 | **Command Code (Pi Web UI-owned)** | `~/.pi-web-ui/command-code/sessions/<internal-id>.json` (session record) and `~/.pi-web-ui/command-code/events/<internal-id>.jsonl` (normalized event journal, the replay source) | `journalctl -u pi-web-ui -f \| grep -i commandcode` | Journal survives API session deletion (`nativeTranscriptRetained`); the record and native home do not. |
+| **Devin (ACP)** | `~/.pi-web-ui/devin-sessions/<internal-id>.jsonl` (Pi-owned JSONL turn log); native store `<DEVIN_HOME>/.local/share/devin/cli/sessions.db` (SQLite, runtime-owned — READ-ONLY access only) and CLI logs under `<DEVIN_HOME>/.local/share/devin/cli/logs/` | `journalctl -u pi-web-ui -f \| grep -i devin`, `devin --version`, `devin models list --format json` | Each turn is one JSON line: prompt, response, model, native session id (`devinNativeSessionId`, e.g. `brass-akubra`), usage, stopReason, tools. Resume works through `session/load` on respawn; a disabled gate (`DEVIN_ENABLED!=true`) refuses creation with 503. |
 | **Command Code native transcripts** | `~/.pi-web-ui/command-code-native-home/<internal-id>/.commandcode/projects/<encoded-cwd>/<nativeId>.jsonl` for server-spawned sessions; `~/.commandcode/projects/<encoded-cwd>/<nativeId>.jsonl` for plain `cmdc` CLI runs (plus `.meta.json`/`.checkpoints.jsonl` siblings) | — | cwd encoding joins path segments with dashes and strips dots (`/root/pi-web-ui` → `root-pi-web-ui`). Server default from `commandCodeNativeHomeDir` in `server/src/config.ts`; `COMMAND_CODE_NATIVE_HOME_DIR` overrides. |
 | **Notification layer** | `~/.pi-web-ui/notifications/` | `journalctl -u pi-web-ui -f`, `GET /api/v1/notifications` | Contains opt-ins, durable outbox/status ledger, and `ingress/` terminal-client spool. |
 | **Unified registry** | `~/.pi-web-ui/session-registry.json` | `journalctl -u pi-web-ui -f` | Cross-runtime source of truth for sidebar metadata. |
@@ -355,8 +357,8 @@ When correlating failures, distinguish between:
 - **Registry path/file references** — stored in `~/.pi-web-ui/session-registry.json`
 
 `npm run debug:where -- <id>` accepts the registry's internal id, path, Claude
-native id, OpenCode native id, Antigravity conversation id, and Command Code
-native id. For Pi ids
+native id, OpenCode native id, Antigravity conversation id, Command Code
+native id, and Devin native session id. For Pi ids
 missing from the registry, it also performs one exact filename glob under the
 configured Pi session root. If that bounded fallback still reports no match,
 the identifier may be stale or malformed; do not begin with a repository-wide

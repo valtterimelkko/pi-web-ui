@@ -366,9 +366,10 @@ use `/capabilities` before dispatching work to an optional runtime.
 GET /api/v1/models
 GET /api/v1/models?runtime=claude
 GET /api/v1/models?runtime=antigravity
+GET /api/v1/models?runtime=devin
 ```
 
-Models are always queried live — new models appear immediately. Each entry carries a `selector` field (since contract 1.26.0) whose value is exactly what `POST /sessions` accepts for that runtime — copy it rather than constructing `provider/id` strings yourself (`provider/id` for pi and opencode; the alias or `profile:<id>` form for claude; the native id for commandcode and antigravity — the slug for antigravity, canonical since contract 1.37.0). Each model may include `thinkingLevels`, the runtime-resolved levels accepted by that concrete model. Do not infer model-specific `max` support from the coarse `reasoning` flag.
+Models are always queried live — new models appear immediately. Each entry carries a `selector` field (since contract 1.26.0) whose value is exactly what `POST /sessions` accepts for that runtime — copy it rather than constructing `provider/id` strings yourself (`provider/id` for pi and opencode; the alias or `profile:<id>` form for claude; the native id for commandcode, antigravity and devin — the slug for antigravity, canonical since contract 1.37.0). Each model may include `thinkingLevels`, the runtime-resolved levels accepted by that concrete model. Devin entries carry additive `pricing {free, raw, costTier?}` / `isNew` / `isBeta` (contract 1.67.0, owner ruling 01: the whole catalogue is usable, pricing is information). Do not infer model-specific `max` support from the coarse `reasoning` flag.
 
 Pi model levels come from the Pi SDK catalogue. Claude's base `sonnet` and `opus` aliases and provider profiles that support the Claude/Z.AI effort ceiling advertise `max`; `haiku` keeps the legacy ceiling. A client should use the selected model's `thinkingLevels` before requesting `max`.
 
@@ -554,7 +555,7 @@ POST /api/v1/sessions
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `runtime` | string | **Yes** | — | `pi`, `claude`, `opencode`, `antigravity`, or feature-gated `commandcode` |
+| `runtime` | string | **Yes** | — | `pi`, `claude`, `opencode`, `antigravity`, feature-gated `commandcode`, or feature-gated `devin` |
 | `cwd` | string | No | `process.cwd()` | Working directory |
 | `model` | string | No | runtime default | Model ID (from `/models`). For Claude, may be a base alias such as `sonnet` or a specific profile entry such as `profile:glm53-claude-sdk`; Command Code requires one exact discovered id: `qwen/qwen3.8-max` or `meta/muse-spark-1.2-contributor`. |
 | `thinkingLevel` | string | No | runtime default | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; use the selected model's `thinkingLevels` from `/models` as the capability source. Not used by Command Code native effort. |
@@ -694,7 +695,7 @@ not just live ones. Liveness comes from the `busy` flag or a recent
 
 | Param | Meaning |
 |---|---|
-| `runtime` | Comma-separated subset of `pi,claude,opencode,antigravity,commandcode` (e.g. `?runtime=pi,claude`). Junk values → `400 INVALID_REQUEST`. |
+| `runtime` | Comma-separated subset of `pi,claude,opencode,antigravity,commandcode,devin` (e.g. `?runtime=pi,claude`). Junk values → `400 INVALID_REQUEST`. |
 | `limit` | Integer 1–1000; caps the returned slice after filtering. |
 | `since` | ISO 8601 timestamp or epoch milliseconds; keeps entries with `lastActivity >= since`. |
 | `cwd` | Exact working-directory match (the web UI sidebar's cwd filter). |
@@ -780,8 +781,8 @@ surfaces them:
 GET /api/v1/sessions/native[?runtime=&limit=&since=]
 ```
 
-- `runtime` — comma-separated subset of `claude,commandcode,opencode,antigravity`
-  (default: all four). `runtime=pi` is refused with an explanatory `400`:
+- `runtime` — comma-separated subset of `claude,commandcode,opencode,antigravity,devin`
+  (default: all five). `runtime=pi` is refused with an explanatory `400`:
   native pi sessions are already auto-discovered into the registry, so use
   `GET /api/v1/sessions?runtime=pi` instead.
 - `limit` — integer 1–200, default 20 (applied after sorting).
@@ -813,7 +814,8 @@ registry already tracks that native session:
 To read a discovered session's content, read the native artefact directly
 (claude and commandcode JSONL are line-delimited JSON; opencode session files
 are small JSON documents; antigravity items are SQLite conversation databases
-— use the `agy` CLI for those).
+— use the `agy` CLI for those; devin sessions live in one SQLite store,
+read through this endpoint).
 
 **Manual scan recipe (no API, works from any shell):**
 
@@ -824,6 +826,7 @@ are small JSON documents; antigravity items are SQLite conversation databases
 | commandcode | `~/.commandcode/projects/<encoded-cwd>/*.jsonl` (plain CLI) and `~/.pi-web-ui/command-code-native-home/*/projects/...` (server-spawned) | `find ~/.commandcode/projects -name '<uuid>.jsonl' -mtime -30 \| xargs ls -t \| head` |
 | opencode | `~/.local/share/opencode/storage/session/*/*.json` | `find ~/.local/share/opencode/storage/session -name 'ses_*.json' -mtime -30 \| xargs ls -t \| head` |
 | antigravity | `~/.gemini/antigravity-cli/conversations/<uuid>.db` (+ `log/cli-*.log`) | `ls -t ~/.gemini/antigravity-cli/conversations/*.db \| head` |
+| devin | `<home>/.local/share/devin/cli/sessions.db` (one SQLite store; read-only) | `devin models list --format json`; sessions list via `GET /api/v1/sessions/native?runtime=devin` |
 
 Server-side log locations for anything the server itself recorded: run
 receipts under `~/.pi-web-ui/run-receipts/` (pruned at 30 days + 1000 entries),

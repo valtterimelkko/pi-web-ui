@@ -6,8 +6,8 @@ Use this matrix to distinguish behavior owned by this repository from behavior s
 |---|---:|---:|---:|---|
 | Browser login and shell | Yes | No | No | Core server/client behavior |
 | Unified session sidebar | Yes | Yes | No | Runtime adapters provide underlying sessions |
-| Streaming chat | Yes | Yes | Yes | Antigravity streams native `text_delta` events (~200 ms cadence) via the agy stream-json process (contract 1.37.0) |
-| Mid-run steer / follow-up | Yes | Yes | No | Pi native (steer joins before the next model call; follow-up runs when the run finishes); Claude SDK delivers steer at the next tool boundary and queues follow-up as its own turn; Command Code steer interrupts the turn and re-delivers as the next prompt, follow-up queued server-side. Channel-backed and cli-direct Claude sessions do **not** steer. See [`PROTOCOL.md`](./PROTOCOL.md) |
+| Streaming chat | Yes | Yes | Yes | Antigravity streams native `text_delta` events (~200 ms cadence) via the agy stream-json process (contract 1.37.0); Devin streams ACP `agent_message_chunk`/`agent_thought_chunk`/tool events over the `devin acp` child |
+| Mid-run steer / follow-up | Yes | Yes | No | Pi native (steer joins before the next model call; follow-up runs when the run finishes); Claude SDK delivers steer at the next tool boundary and queues follow-up as its own turn; Command Code steer interrupts the turn and re-delivers as the next prompt, follow-up queued server-side; Devin has no mid-run join (steer refused with 409, follow-up queued FIFO server-side). Channel-backed and cli-direct Claude sessions do **not** steer. See [`PROTOCOL.md`](./PROTOCOL.md) |
 | Transcript replay | Yes | Yes | No | Storage ownership differs by runtime |
 | Session pin/archive/display name | Yes | No | No | Stored through core metadata/preferences paths |
 | Model selection | Yes | Yes | No | Available models and thinking levels come from runtime capability data |
@@ -34,6 +34,7 @@ Use this matrix to distinguish behavior owned by this repository from behavior s
 | OpenCode | `opencode serve` HTTP/SSE | Supported server integration with OpenCode-owned transcript storage |
 | Antigravity | persistent `agy --input-format stream-json --output-format stream-json` process per session | Real token streaming, tool-call events, real token usage, native follow-up queueing; runtime-owned conversation DB plus Pi Web UI turn logs |
 | Command Code | `cmd -p --output-format json` subprocess per session | Single `COMMAND_CODE_ENABLED` gate; NDJSON event stream normalized into a private replay journal; centrally managed model catalogue denylist |
+| Devin | one lazy `devin acp` child per live session (JSON-RPC over stdio, ACP protocol 1) | Single `DEVIN_ENABLED` gate (off by default); streaming text/thinking/tool/usage events, FIFO follow-up queue between turns, resume via `session/load`; whole model catalogue with additive `pricing` (owner ruling 01: no allow-list); see [`DEVIN-INTEGRATION.md`](./DEVIN-INTEGRATION.md) |
 
 ## Documentation rule
 
