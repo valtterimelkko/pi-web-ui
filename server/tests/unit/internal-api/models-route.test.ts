@@ -759,6 +759,15 @@ describe('createModelsRoutes — selector field (contract 1.26.0, round-2 defect
   });
 });
 
+// The devin projection sits behind the runtime gate (`config.devinEnabled`,
+// read from env at import time). Unit tests must not depend on the ambient
+// DEVIN_ENABLED, so pin it true for this file while keeping every other
+// config field real (importOriginal).
+vi.mock('../../../src/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/config.js')>();
+  return { config: { ...actual.config, devinEnabled: true } };
+});
+
 describe('createModelsRoutes — devin catalogue carries family grouping (lane D3)', () => {
   it('each devin entry gains additive family/familyName from the service catalogue', async () => {
     const devinService = {
