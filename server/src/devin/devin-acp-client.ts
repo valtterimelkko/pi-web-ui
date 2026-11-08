@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { applySessionIdentityEnv, type SessionEnvIdentity } from '../session-env-identity.js';
 import { devinSpawnEnv } from './devin-spawn-env.js';
 import { isAgentToClientRequest, nextRequestId, parseAcpLine, type AcpMessage } from './devin-acp-protocol.js';
 import type { AcpSessionUpdate } from './devin-event-adapter.js';
@@ -36,6 +37,8 @@ export interface DevinAcpClientOptions {
   initTimeoutMs?: number;
   /** Extra allow-listed env values (DEVIN_* only; D2 keeps everything else out). */
   extraEnv?: Record<string, string>;
+  /** Server-set session identity (origin, parent, capture opt-in) — added AFTER the allow-list, like antigravity. */
+  sessionIdentity?: SessionEnvIdentity;
 }
 
 export interface AcpTurnResult {
@@ -84,7 +87,8 @@ export class DevinAcpClient {
   }
 
   private childEnv(): NodeJS.ProcessEnv {
-    return devinSpawnEnv(this.options.devinHome, { ...process.env, ...(this.options.extraEnv ?? {}) });
+    const env = devinSpawnEnv(this.options.devinHome, { ...process.env, ...(this.options.extraEnv ?? {}) });
+    return applySessionIdentityEnv(env as Record<string, string | undefined>, this.options.sessionIdentity) as NodeJS.ProcessEnv;
   }
 
   /**

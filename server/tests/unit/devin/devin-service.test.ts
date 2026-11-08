@@ -416,6 +416,22 @@ describe('devin service', () => {
     await expect(setPromise).rejects.toThrow(/set_config_option/);
   });
 
+  it('an Internal API session carries its identity env (origin, parent, capture) into the devin child, like antigravity', async () => {
+    const { sessionId } = await service.createSession('/ws');
+    await (service as unknown as { registry: { upsert: (e: Record<string, unknown>) => Promise<void> } }).registry.upsert({
+      id: sessionId, sdkType: 'devin', origin: 'internal-api', parentSessionId: 'parent-1',
+    });
+    const done = new Promise<void>((resolve) => {
+      void service.sendPrompt(sessionId, 'hi', () => undefined, () => resolve());
+    });
+    const child = await waitForChild(children);
+    child.respondLast(promptResult());
+    await done;
+    expect(child.spawnEnv.PI_WEB_UI_SESSION_ID).toBe(sessionId);
+    expect(child.spawnEnv.PI_WEB_UI_SESSION_ORIGIN).toBe('internal-api');
+    expect(child.spawnEnv.PI_WEB_UI_PARENT_SESSION_ID).toBe('parent-1');
+  });
+
   it('closure N1: a rejected setModel leaves the registry model unchanged', async () => {
     const { sessionId } = await service.createSession('/ws');
     const completed = new Promise<void>((resolve) => {

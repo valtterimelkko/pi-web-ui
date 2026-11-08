@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { sessionIdentityFromEntry } from '../session-env-identity.js';
 import { spawn } from 'node:child_process';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
 import { DevinSessionStore, type DevinStoredToolCall, type DevinStoredUsage, DEVIN_STORED_TOOL_LIMIT, DEVIN_STORED_TOOL_OUTPUT_LIMIT } from './devin-session-store.js';
@@ -379,6 +380,7 @@ export class DevinService {
           executablePath: this.executablePath,
           ...(storedNativeId ? { resumeNativeSessionId: storedNativeId } : {}),
           ...(this.spawnFn ? { spawnFn: this.spawnFn } : {}),
+          sessionIdentity: sessionIdentityFromEntry(entry),
         });
         const started = await client.start();
         if (started.nativeSessionId !== storedNativeId) {
