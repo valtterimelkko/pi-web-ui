@@ -7,6 +7,7 @@ import type { MultiSessionManager } from './pi/multi-session-manager.js';
 import type { ClaudeService } from './claude/index.js';
 import type { OpenCodeService } from './opencode/index.js';
 import type { AntigravityService } from './antigravity/index.js';
+import type { DevinService } from './devin/index.js';
 import { config } from './config.js';
 import { createLogger } from './logging/logger.js';
 
@@ -77,6 +78,7 @@ export interface SessionCleanupConfig {
   piSessionDir: string;
   claudeSessionDir: string;
   antigravitySessionDir: string;
+  devinSessionDir: string;
 }
 
 export interface SessionCleanupResult {
@@ -94,6 +96,7 @@ export class SessionCleanupService {
   private claudeService?: ClaudeService;
   private opencodeService?: OpenCodeService;
   private antigravityService?: AntigravityService;
+  private devinService?: DevinService;
   private config: SessionCleanupConfig;
   private timer?: ReturnType<typeof setInterval>;
 
@@ -110,6 +113,7 @@ export class SessionCleanupService {
       piSessionDir: cleanupConfig?.piSessionDir ?? config.sessionDir ?? path.join(config.piAgentDir, 'sessions'),
       claudeSessionDir: cleanupConfig?.claudeSessionDir ?? config.claudeSessionDir,
       antigravitySessionDir: cleanupConfig?.antigravitySessionDir ?? config.antigravitySessionDir,
+      devinSessionDir: cleanupConfig?.devinSessionDir ?? config.devinSessionDir,
     };
   }
 
@@ -118,11 +122,13 @@ export class SessionCleanupService {
     claudeService: ClaudeService;
     opencodeService: OpenCodeService;
     antigravityService?: AntigravityService;
+    devinService?: DevinService;
   }): void {
     this.multiSessionManager = opts.multiSessionManager;
     this.claudeService = opts.claudeService;
     this.opencodeService = opts.opencodeService;
     this.antigravityService = opts.antigravityService;
+    this.devinService = opts.devinService;
   }
 
   start(): void {
@@ -346,6 +352,7 @@ export class SessionCleanupService {
     this.claudeService?.unpinSession(sessionId);
     this.opencodeService?.unpinSession(sessionId);
     this.antigravityService?.unpinSession(sessionId);
+    this.devinService?.unpinSession(sessionId);
   }
 
   private async autoDeleteArchivedSessions(
@@ -474,9 +481,14 @@ export class SessionCleanupService {
     return dir === this.config.antigravitySessionDir && sessionPath.endsWith('.jsonl');
   }
 
+  private isDevinFilePath(sessionPath: string): boolean {
+    const dir = path.dirname(sessionPath);
+    return dir === this.config.devinSessionDir && sessionPath.endsWith('.jsonl');
+  }
+
   private async getRuntimeFileMtime(sessionPath: string): Promise<number | undefined> {
     try {
-      if (this.isPiFilePath(sessionPath) || this.isClaudeFilePath(sessionPath) || this.isAntigravityFilePath(sessionPath)) {
+      if (this.isPiFilePath(sessionPath) || this.isClaudeFilePath(sessionPath) || this.isAntigravityFilePath(sessionPath) || this.isDevinFilePath(sessionPath)) {
         const stat = await fs.stat(sessionPath);
         return stat.mtime.getTime();
       }
@@ -486,6 +498,8 @@ export class SessionCleanupService {
         try { return (await fs.stat(claudeFile)).mtime.getTime(); } catch { /* ignore */ }
         const agFile = path.join(this.config.antigravitySessionDir, `${sessionPath}.jsonl`);
         try { return (await fs.stat(agFile)).mtime.getTime(); } catch { /* ignore */ }
+        const devinFile = path.join(this.config.devinSessionDir, `${sessionPath}.jsonl`);
+        try { return (await fs.stat(devinFile)).mtime.getTime(); } catch { /* ignore */ }
       }
     } catch {
       /* ignore */
@@ -494,7 +508,7 @@ export class SessionCleanupService {
   }
 
   private async deleteRuntimeFileByPath(sessionPath: string): Promise<void> {
-    if (this.isPiFilePath(sessionPath) || this.isClaudeFilePath(sessionPath) || this.isAntigravityFilePath(sessionPath)) {
+    if (this.isPiFilePath(sessionPath) || this.isClaudeFilePath(sessionPath) || this.isAntigravityFilePath(sessionPath) || this.isDevinFilePath(sessionPath)) {
       try {
         await fs.unlink(sessionPath);
       } catch (err) {
@@ -507,6 +521,8 @@ export class SessionCleanupService {
       try { await fs.unlink(claudeFile); } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err; }
       const agFile = path.join(this.config.antigravitySessionDir, `${sessionPath}.jsonl`);
       try { await fs.unlink(agFile); } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err; }
+      const devinFile = path.join(this.config.devinSessionDir, `${sessionPath}.jsonl`);
+      try { await fs.unlink(devinFile); } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err; }
     }
   }
 
@@ -531,6 +547,13 @@ export class SessionCleanupService {
       const agFile = path.join(this.config.antigravitySessionDir, `${sessionPath}.jsonl`);
       try {
         await fs.access(agFile);
+        return true;
+      } catch {
+        /* fall through to devin check */
+      }
+      const devinFile = path.join(this.config.devinSessionDir, `${sessionPath}.jsonl`);
+      try {
+        await fs.access(devinFile);
         return true;
       } catch {
         return false;
@@ -585,6 +608,18 @@ export class SessionCleanupService {
               await fs.unlink(path.join(logsDir, logFile));
             }
           }
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        }
+        break;
+      }
+      case 'devin': {
+        // Review fix 6: mirror the antigravity branch — the per-session turn
+        // store JSONL is removed with the archived record (devin keeps no
+        // extra log files).
+        const devinFile = path.join(this.config.devinSessionDir, `${entry.id}.jsonl`);
+        try {
+          await fs.unlink(devinFile);
         } catch (err) {
           if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
         }

@@ -251,6 +251,7 @@ async function initialize(): Promise<void> {
         claudeService: wsManager.getClaudeService(),
         opencodeService: wsManager.getOpenCodeService(),
         antigravityService: wsManager.getAntigravityService(),
+        devinService: wsManager.getDevinService(),
       });
       sessionCleanup.start();
     }

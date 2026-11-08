@@ -74,6 +74,12 @@ function makeAntigravityService() {
   } as any;
 }
 
+function makeDevinService() {
+  return {
+    unpinSession: vi.fn(() => true),
+  } as any;
+}
+
 describe('SessionCleanupService', () => {
   let tmpDir: string;
   let prefsPath: string;
@@ -122,15 +128,17 @@ describe('SessionCleanupService', () => {
       piSessionDir: path.join(tmpDir, 'pi-sessions'),
       claudeSessionDir: path.join(tmpDir, 'claude-sessions'),
       antigravitySessionDir: path.join(tmpDir, 'antigravity-sessions'),
+      devinSessionDir: path.join(tmpDir, 'devin-sessions'),
     });
   }
 
-  function bindAll(service: any, extra: { multi?: any; claude?: any; opencode?: any; antigravity?: any } = {}) {
+  function bindAll(service: any, extra: { multi?: any; claude?: any; opencode?: any; antigravity?: any; devin?: any } = {}) {
     service.bindRuntimes({
       multiSessionManager: extra.multi ?? makeMultiSessionManager(),
       claudeService: extra.claude ?? makeClaudeService(),
       opencodeService: extra.opencode ?? makeOpenCodeService(),
       antigravityService: extra.antigravity ?? makeAntigravityService(),
+      devinService: extra.devin ?? makeDevinService(),
     });
   }
 
@@ -701,6 +709,51 @@ describe('SessionCleanupService', () => {
 
       expect(result.deleted).toContain(sessionId);
       await expect(fs.stat(jsonlFile)).rejects.toThrow();
+    });
+  });
+
+  describe('devin cleanup', () => {
+    it('review fix 6: deletes an archived Devin session JSONL and unpins via the devin service', async () => {
+      const sessionId = 'old-devin-archived';
+      const devinDir = path.join(tmpDir, 'devin-sessions');
+      await fs.mkdir(devinDir, { recursive: true });
+
+      const jsonlFile = path.join(devinDir, `${sessionId}.jsonl`);
+      await fs.writeFile(jsonlFile, 'turn\n', 'utf-8');
+
+      await writePrefs({ archivedSessionPaths: [sessionId], pinnedSessionPaths: [] });
+      mockRegistryEntries.set(sessionId, {
+        id: sessionId, sdkType: 'devin', path: sessionId,
+        lastActivity: new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString(), status: 'idle',
+      });
+
+      const devin = makeDevinService();
+      const service = makeService();
+      bindAll(service, { devin });
+
+      const result = await service.runCleanup(prefsPath);
+
+      expect(result.deleted).toContain(sessionId);
+      await expect(fs.stat(jsonlFile)).rejects.toThrow();
+      expect(devin.unpinSession).toHaveBeenCalledWith(sessionId);
+      const prefs = await readPrefs();
+      expect(prefs.archivedSessionPaths).not.toContain(sessionId);
+    });
+
+    it('review fix 6: tolerates a missing Devin session file when deleting the archived record', async () => {
+      const sessionId = 'old-devin-no-file';
+      await writePrefs({ archivedSessionPaths: [sessionId], pinnedSessionPaths: [] });
+      mockRegistryEntries.set(sessionId, {
+        id: sessionId, sdkType: 'devin', path: sessionId,
+        lastActivity: new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString(), status: 'idle',
+      });
+
+      const service = makeService();
+      bindAll(service);
+
+      const result = await service.runCleanup(prefsPath);
+      expect(result.deleted).toContain(sessionId);
+      expect(result.errors).toEqual([]);
     });
   });
 
