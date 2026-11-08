@@ -238,7 +238,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       }
       // Devin (lane D3): the thinking selector only renders for a family with
       // a level axis — an axis-less model would refuse the swap with a 4xx.
-      if (!isClaudeSession && !(isDevinSession && availableThinkingLevels.length === 0)) {
+      if (!(isDevinSession && availableThinkingLevels.length === 0)) {
         sendThinkingLevel(thinkingLevel);
       }
     }
