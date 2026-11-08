@@ -194,11 +194,11 @@ const DEVIN_C1_1_68_0_ROW: StabilityExceptionRow = {
   version: '1.68.0',
 };
 
-/** The live table's twelfth row: devin native items name their session (additive optional field). */
+/** The live table's twelfth row: devin native items name their session, and lane D3's model families fold into the same undeployed 1.69.0. */
 const DEVIN_WL_1_69_0_ROW: StabilityExceptionRow = {
   date: '2026-11-08',
   decision: 'DEVIN-PARITY-PLAN (owner plan of record; peer report from the preference keeper, 2026-11-08)',
-  what: "1.69.0 (devin-parity worklog fix): `GET /api/v1/sessions/native` devin items gain optional `sessionName` — the session's name in the shared Devin store (`nativePath` is the store path, common to every devin session, so a bare path could not be read back as one session). Additive optional field only; no new routes, types or error codes.",
+  what: "1.69.0 (devin-parity worklog fix + lane D3 model families): `GET /api/v1/sessions/native` devin items gain optional `sessionName` — the session's name in the shared Devin store (`nativePath` is the store path, common to every devin session, so a bare path could not be read back as one session). Lane D3 (folded into the still-undeployed 1.69.0): devin create honours `thinkingLevel` — a variant id resolves to its sibling id, a family base id (`swe-2-flash`) resolves to `<base>-<level>` with the requested level, else `medium`, else the family's lowest; an unavailable level is `400 INVALID_REQUEST` naming the levels (never substituted); an axis-less model creates unchanged with an honest `thinkingLevelNote`; the batch create path follows the same rule (`BatchCreateResultItem.thinkingLevelNote`); `GET /api/v1/models` devin entries gain additive `family` + `familyName` (the grouping the browser uses to show one choice per family). Additive optional fields only; no new routes or error codes.",
   version: '1.69.0',
 };
 

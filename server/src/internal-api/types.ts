@@ -389,6 +389,9 @@ export interface BatchCreateResultItem {
   /** Contract 1.65.0 (command-centre step 1k): the class recorded at creation
    *  for this entry (declared or server-derived); absent = not validation. */
   sessionClass?: 'validation';
+  /** Devin (lane D3): the entry's model has no level axis, so a requested
+   *  thinkingLevel could not apply — created unchanged, said honestly. */
+  thinkingLevelNote?: string;
   /** Contract 1.49.0: admission refusals (ADMISSION_CAPACITY_EXHAUSTED) carry reason + retryAfterSeconds. */
   /** Contract 1.53.0 (C4): preflight refusals (PREFLIGHT_FAILED) additionally carry failures[] ({kind,item,problem}). */
   error?: { code: string; message: string; reason?: string; retryAfterSeconds?: number; failures?: PreflightFailure[] };
@@ -1364,6 +1367,11 @@ export interface ModelInfo {
   isNew?: boolean;
   /** Devin: catalogue flag from the CLI (is_beta). */
   isBeta?: boolean;
+  /** Devin (lane D3): the family base id — the id minus its trailing level
+   *  token, or the id itself when the model has no level axis. */
+  family?: string;
+  /** Devin (lane D3): display name without the level word (e.g. "SWE-2 Flash"). */
+  familyName?: string;
 }
 
 export interface ModelsResponse {

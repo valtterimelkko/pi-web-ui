@@ -100,6 +100,20 @@ summary).
   picker. Each entry carries an additive `pricing` field (`free` boolean plus
   the CLI's raw price text) so callers can see which models are free; it is
   information, never a gate.
+- **One choice per family (lane D3, contract 1.69.0).** Every catalogue entry
+  carries additive `family` (the base id its level variants share, or the id
+  itself when it has no level axis) and `familyName` (the display name without
+  the level word, e.g. "SWE-2 Flash"). The browser's New Session picker and
+  the session header show one entry per family with a level dropdown — never
+  nine separate selectors for one thing (owner, 2026-11-08).
+- **Create honours the requested level.** `POST /api/v1/sessions` and the
+  batch path resolve model + `thinkingLevel` to one id before the session
+  exists: a variant id swaps to its sibling (`swe-2-flash-medium` + `high` →
+  `swe-2-flash-high`); a family base id (`swe-2-flash`) resolves to
+  `<base>-<level>` — requested level, else `medium`, else the family's
+  lowest; an unavailable level is `400 INVALID_REQUEST` naming the levels
+  (never substituted); an axis-less model creates unchanged with a
+  `thinkingLevelNote`. The create response's `model` is the resolved id.
 - **Thinking levels are sibling-model swaps** (plan D4): a model's levels are
   the catalogue ids that differ ONLY in the trailing token among
   `low|medium|high|xhigh|max` — exact `base-<level>` equality, so another

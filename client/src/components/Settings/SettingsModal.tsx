@@ -7,6 +7,7 @@ import { useSessionStore } from '../../store';
 import { ModelSelector, type Model } from './ModelSelector';
 import { ThinkingLevelSelector, type ThinkingLevel } from './ThinkingLevelSelector';
 import { claudeAvailableThinkingLevels, LEGACY_THINKING_LEVELS } from '../../lib/claudeThinkingLevels';
+import { groupDevinModelsByFamily, resolveDevinVariantId, type DevinCatalogModel } from '../../lib/devinModelFamilies';
 
 // A Claude provider-profile model entry, as returned by GET /api/models?sdkType=claude.
 interface ClaudeProfileEntry {
@@ -52,6 +53,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const isOpenCodeSession = useMemo(() => currentSessionSdkType === 'opencode', [currentSessionSdkType]);
   const isAntigravitySession = useMemo(() => currentSessionSdkType === 'antigravity', [currentSessionSdkType]);
   const isCommandCodeSession = useMemo(() => currentSessionSdkType === 'commandcode', [currentSessionSdkType]);
+  const isDevinSession = useMemo(() => currentSessionSdkType === 'devin', [currentSessionSdkType]);
 
   // Profile entries for the locked Claude model panel (best-effort fetch).
   const [claudeProfiles, setClaudeProfiles] = useState<ClaudeProfileEntry[]>([]);
@@ -107,13 +109,36 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           setIsLoading(false);
           return;
         }
+        if (isDevinSession) {
+          // Lane D3: one entry per family. The session's current model is a
+          // variant id; its level is kept when the target family has it, else
+          // the family default applies.
+          const resp = await api.get('/api/models?sdkType=devin') as { models?: DevinCatalogModel[] };
+          const raw = resp.models || [];
+          const families = groupDevinModelsByFamily(raw);
+          const currentVariant = raw.find((m) => m.id === storeCurrentModel);
+          const currentLevel = currentVariant?.family && (currentVariant.thinkingLevels ?? []).length > 0
+            ? currentVariant.id.slice(currentVariant.family.length + 1)
+            : null;
+          const keptLevel = currentLevel && (currentVariant?.thinkingLevels ?? []).includes(currentLevel) ? currentLevel : null;
+          const entries: Model[] = families.map((f) => ({
+            id: resolveDevinVariantId(f, keptLevel && f.levels.includes(keptLevel) ? keptLevel : f.defaultLevel),
+            name: f.name,
+            provider: 'devin',
+            thinkingLevels: f.levels as Model['thinkingLevels'],
+          }));
+          setModels(entries);
+          setCurrentModel(storeCurrentModel || entries[0]?.id || '');
+          setIsLoading(false);
+          return;
+        }
         
         // Add a timeout to prevent infinite loading (10 seconds)
         const timeoutPromise = new Promise<never>((_, reject) => {
           setTimeout(() => reject(new Error('Request timeout')), 10000);
         });
 
-        const sdkTypeParam = isOpenCodeSession ? 'opencode' : isAntigravitySession ? 'antigravity' : isCommandCodeSession ? 'commandcode' : 'pi';
+        const sdkTypeParam = isOpenCodeSession ? 'opencode' : isAntigravitySession ? 'antigravity' : isCommandCodeSession ? 'commandcode' : isDevinSession ? 'devin' : 'pi';
         const response = await Promise.race([
           api.get(`/api/models?sdkType=${sdkTypeParam}`) as Promise<{ models: Model[] }>,
           timeoutPromise
@@ -132,7 +157,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     };
 
     fetchModels();
-  }, [isOpen, isClaudeSession, isCommandCodeSession, isOpenCodeSession, isAntigravitySession, storeCurrentModel]); // Depend on runtime and current model
+  }, [isOpen, isClaudeSession, isCommandCodeSession, isDevinSession, isOpenCodeSession, isAntigravitySession, storeCurrentModel]); // Depend on runtime and current model
 
   // Update current model when storeCurrentModel changes (separate from fetch)
   useEffect(() => {
@@ -146,10 +171,15 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       setError(null);
       if (storeCurrentThinkingLevel) {
         setThinkingLevel(storeCurrentThinkingLevel as ThinkingLevel);
+      } else if (isDevinSession && storeCurrentModel) {
+        // Lane D3: devin sessions carry the level in the model id
+        // (`swe-2-flash-medium`) — show it as the current level.
+        const token = storeCurrentModel.slice(storeCurrentModel.lastIndexOf('-') + 1);
+        if (['low', 'medium', 'high', 'xhigh', 'max'].includes(token)) setThinkingLevel(token as ThinkingLevel);
       }
       setNativeEffort(storeCurrentEffort ?? '');
     }
-  }, [isOpen, storeCurrentThinkingLevel, storeCurrentEffort]);
+  }, [isOpen, storeCurrentThinkingLevel, storeCurrentEffort, isDevinSession, storeCurrentModel]);
 
   useEffect(() => {
     if (errorMessage && isOpen) {
@@ -169,12 +199,19 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       return claudeAvailableThinkingLevels(storeCurrentModel, claudeProfiles);
     }
     if (isOpenCodeSession || isAntigravitySession || isCommandCodeSession) return LEGACY_THINKING_LEVELS;
+    if (isDevinSession) {
+      // Lane D3: the selected family's own levels. The projected Model entry
+      // for the current model carries them; [] marks an axis-less family (no
+      // level control).
+      const selected = models.find((model) => model.id === (storeCurrentModel || currentModel));
+      return (selected?.thinkingLevels ?? []) as readonly ThinkingLevel[];
+    }
 
     const selectedModel = models.find(
       (model) => `${model.provider}/${model.id}` === currentModel,
     );
     return selectedModel?.thinkingLevels ?? LEGACY_THINKING_LEVELS;
-  }, [claudeProfiles, currentModel, isAntigravitySession, isClaudeSession, isCommandCodeSession, isOpenCodeSession, models, storeCurrentModel]);
+  }, [claudeProfiles, currentModel, isAntigravitySession, isClaudeSession, isCommandCodeSession, isDevinSession, isOpenCodeSession, models, storeCurrentModel]);
 
   useEffect(() => {
     if (isLoading) return;
@@ -199,7 +236,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       if (!isClaudeSession) {
         setModel(currentModel);
       }
-      sendThinkingLevel(thinkingLevel);
+      // Devin (lane D3): the thinking selector only renders for a family with
+      // a level axis — an axis-less model would refuse the swap with a 4xx.
+      if (!isClaudeSession && !(isDevinSession && availableThinkingLevels.length === 0)) {
+        sendThinkingLevel(thinkingLevel);
+      }
     }
 
     setTimeout(() => {
@@ -275,7 +316,18 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   Command Code
                 </span>
               )}
+              {isDevinSession && (
+                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 border border-amber-200">
+                  Devin (ACP)
+                </span>
+              )}
             </h3>
+            {isDevinSession && (
+              <div className="mb-3 flex items-start gap-2 text-xs text-gray-500 bg-gray-50 p-2 rounded">
+                <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>Devin families show once; the thinking level picks the sibling model (swapped between turns).</span>
+              </div>
+            )}
             {isOpenCodeSession && (
               <div className="mb-3 flex items-start gap-2 text-xs text-gray-500 bg-gray-50 p-2 rounded">
                 <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
@@ -348,7 +400,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                             const timeoutPromise = new Promise<never>((_, reject) => {
                               setTimeout(() => reject(new Error('Request timeout')), 10000);
                             });
-                            const sdkTypeParam = isOpenCodeSession ? 'opencode' : isAntigravitySession ? 'antigravity' : isCommandCodeSession ? 'commandcode' : 'pi';
+                            const sdkTypeParam = isOpenCodeSession ? 'opencode' : isAntigravitySession ? 'antigravity' : isCommandCodeSession ? 'commandcode' : isDevinSession ? 'devin' : 'pi';
                             const response = await Promise.race([
                               api.get(`/api/models?sdkType=${sdkTypeParam}`) as Promise<{ models: Model[] }>,
                               timeoutPromise
@@ -379,7 +431,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 models={models}
                 currentModel={currentModel}
                 onSelect={setCurrentModel}
-                qualifyWithProvider={!isClaudeSession}
+                // Devin (lane D3): entries are already per-family ids; the
+                // session's current model is the bare variant id, so matching
+                // must NOT qualify with the provider.
+                qualifyWithProvider={!isClaudeSession && !isDevinSession}
               />
             )}
           </section>
@@ -401,6 +456,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   {storeCurrentEffortLevels.map((level) => <option key={level} value={level}>{level}</option>)}
                 </select>
               )}
+            </section>
+          ) : isDevinSession && availableThinkingLevels.length === 0 ? (
+            <section data-testid="devin-no-level-note">
+              <h3 className="text-sm font-medium text-gray-500 mb-3">Thinking Level</h3>
+              <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-3">
+                This Devin model has no thinking-level axis — there is nothing to swap.
+              </p>
             </section>
           ) : (
             <section>

@@ -174,6 +174,9 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
               pricing: m.pricing,
               ...(m.isNew ? { isNew: true } : {}),
               ...(m.isBeta ? { isBeta: true } : {}),
+              // Lane D3: family grouping fields (base id + level-less name).
+              family: m.family,
+              familyName: m.familyName,
             }));
           } catch {
             // devin models may not respond — return empty

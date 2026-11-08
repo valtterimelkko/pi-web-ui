@@ -758,3 +758,37 @@ describe('createModelsRoutes — selector field (contract 1.26.0, round-2 defect
     expect(models.commandcode[0].selector).toBe('deepseek/deepseek-v4-pro');
   });
 });
+
+describe('createModelsRoutes — devin catalogue carries family grouping (lane D3)', () => {
+  it('each devin entry gains additive family/familyName from the service catalogue', async () => {
+    const devinService = {
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getAvailableModels: vi.fn().mockResolvedValue([
+        { id: 'swe-2-flash-medium', selector: 'swe-2-flash-medium', name: 'SWE-2 Flash Medium', provider: 'devin', thinkingLevels: ['medium', 'high', 'max'], pricing: { free: true, raw: 'Free' }, family: 'swe-2-flash', familyName: 'SWE-2 Flash' },
+        { id: 'kimi-k2-6', selector: 'kimi-k2-6', name: 'Kimi K2.6', provider: 'devin', thinkingLevels: [], pricing: { free: false, raw: '$1' }, family: 'kimi-k2-6', familyName: 'Kimi K2.6' },
+      ]),
+    };
+    const { createModelsRoutes } = await import('../../../src/internal-api/routes/models.js');
+    const routes = createModelsRoutes({
+      piService: { getAvailableModels: vi.fn().mockResolvedValue([]) },
+      claudeService: { isAvailable: vi.fn().mockResolvedValue(false) },
+      antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) },
+      opencodeService: { isAvailable: vi.fn().mockResolvedValue(false), isEnabled: vi.fn().mockReturnValue(false) },
+      devinService,
+    } as any);
+    const res = createMockRes();
+    const req = (() => {
+      const payload = [Buffer.from('')];
+      const r = Readable.from(payload) as unknown as IncomingMessage;
+      r.url = '/api/v1/models?runtime=devin';
+      r.method = 'GET';
+      r.headers = {};
+      return r;
+    })();
+    await (routes as any).handleListModels(req, res);
+    const body = JSON.parse(res.body) as { models: { devin: Array<Record<string, unknown>> } };
+    expect(body.models.devin).toHaveLength(2);
+    expect(body.models.devin[0]).toMatchObject({ id: 'swe-2-flash-medium', family: 'swe-2-flash', familyName: 'SWE-2 Flash' });
+    expect(body.models.devin[1]).toMatchObject({ id: 'kimi-k2-6', family: 'kimi-k2-6', familyName: 'Kimi K2.6' });
+  });
+});

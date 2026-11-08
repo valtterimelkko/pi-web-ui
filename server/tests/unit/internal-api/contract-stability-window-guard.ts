@@ -51,7 +51,10 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * devin-parity programme lane C1) — the devin goal function and devin receipt
  * `servedModel` added no routes, types or error codes, so the shape fingerprint
  * is unchanged; NOT re-based at **1.69.0** (2026-11-08) — devin native items'
- * optional `sessionName` is outside the snapshot's shapes. The
+ * optional `sessionName` is outside the snapshot's shapes; re-based again at
+ * **1.69.0** (2026-11-08, devin-parity lane D3, folded into the undeployed
+ * 1.69.0) — the additive `ModelInfo.family` / `ModelInfo.familyName` devin
+ * family-grouping fields. The
  * ENFORCED fingerprint is
  * the SHA-256 of the snapshot's canonical shape: the parsed snapshot with the
  * top-level `contractVersion` field removed, serialised with recursively
@@ -59,7 +62,7 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * still match). The full-file hash is informational (kept at the 1.58.0
  * opening version for the record).
  */
-export const BASELINE_SHAPE_SHA256 = '632ed0f258455699d8a3096242fff27e9132d21bb286e6a95fe87810198dc487';
+export const BASELINE_SHAPE_SHA256 = 'd57de39b315af97ff9d5db2628c86278a1c2a439e2019298031495270b0920a5';
 export const BASELINE_FULL_SHA256 = 'fab83d8b2c237d0f8d43733dbeff60fb45c2ee690cfe7ca2b1cc044da4dc5fec';
 
 /** Sorted route keys of the snapshot at 1.58.0 (the window's route baseline). */

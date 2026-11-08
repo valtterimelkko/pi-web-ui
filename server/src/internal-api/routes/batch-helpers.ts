@@ -20,6 +20,7 @@ import type { BatchCreateEntry, SessionRuntime } from '../types.js';
 import { unlink } from 'fs/promises';
 import { config } from '../../config.js';
 import { ErrorCode } from '../error-codes.js';
+import { resolveDevinCreateModel, type DevinModelEntry } from '../../devin/devin-models.js';
 import {
   assertPiModelAllowed,
   assertResolvedPiModelAllowed,
@@ -61,6 +62,9 @@ export interface CreatedSession {
   effort?: CommandCodeEffort;
   defaultEffort?: CommandCodeEffort;
   effortCapabilityHash?: string;
+  /** Lane D3 (devin only): the model has no level axis, so a requested
+   *  thinkingLevel could not apply — surfaced honestly, never substituted. */
+  thinkingLevelNote?: string;
   cwd: string;
 }
 
@@ -162,8 +166,23 @@ export async function createOneSession(params: {
       if (!(await deps.devinService.isAvailable())) {
         throw new RuntimeOpError(ErrorCode.RUNTIME_UNAVAILABLE, 'Devin runtime is disabled or unavailable');
       }
-      const { sessionId } = await deps.devinService.createSession(cwd, entry.model);
-      return { sessionId, sessionPath: sessionId, runtime: 'devin', model: entry.model, cwd };
+      // Lane D3: batch entries resolve model+level exactly like single create
+      // (sibling swap; family id accepted; unavailable level = 400-code item
+      // error; axis-less model unchanged with a thinkingLevelNote).
+      const devinCatalogue = ((await deps.devinService.getAvailableModels?.().catch(() => [])) ?? []) as DevinModelEntry[];
+      const devinResolution = resolveDevinCreateModel(entry.model, entry.thinkingLevel, devinCatalogue, config.devinDefaultModel);
+      if (!devinResolution.ok) throw new RuntimeOpError(ErrorCode.INVALID_REQUEST, devinResolution.reason);
+      const { sessionId } = await deps.devinService.createSession(cwd, devinResolution.modelId);
+      return {
+        sessionId,
+        sessionPath: sessionId,
+        runtime: 'devin',
+        model: devinResolution.modelId,
+        cwd,
+        ...(devinResolution.noLevelAxis
+          ? { thinkingLevelNote: `model '${devinResolution.modelId}' has no thinking-level axis; created unchanged (requested level '${entry.thinkingLevel}' is not applicable)` }
+          : {}),
+      };
     }
 
     case 'pi': {

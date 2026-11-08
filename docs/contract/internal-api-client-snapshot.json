@@ -891,6 +891,14 @@
         "isBeta": {
           "type": "boolean",
           "optional": true
+        },
+        "family": {
+          "type": "string",
+          "optional": true
+        },
+        "familyName": {
+          "type": "string",
+          "optional": true
         }
       }
     },

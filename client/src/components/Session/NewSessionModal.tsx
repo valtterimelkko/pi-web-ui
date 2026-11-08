@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { X, Folder, FolderOpen, ChevronRight, Loader2, ArrowUp, History, ChevronDown, ChevronUp, Star, Mic, Lock } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useUIStore } from '../../store/uiStore';
 import { useSessionStore } from '../../store';
 import type { SdkType, CommandCodeEffort } from '@pi-web-ui/shared';
+import { groupDevinModelsByFamily, resolveDevinVariantId, type DevinCatalogModel } from '../../lib/devinModelFamilies';
 
 interface NewSessionModalProps {
   isOpen: boolean;
@@ -114,9 +115,11 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const [pathInput, setPathInput] = useState('/root');
   const [sdkType, setSdkType] = useState<SdkType>('pi');
   const [piModels, setPiModels] = useState<PiModelEntry[]>([]);
-  const [devinModels, setDevinModels] = useState<Array<{ id: string; name?: string; pricing?: { free: boolean; raw: string; costTier?: string }; thinkingLevels?: string[] }>>([]);
+  const [devinModels, setDevinModels] = useState<DevinCatalogModel[]>([]);
   const [devinModelsLoading, setDevinModelsLoading] = useState(false);
-  const [devinModel, setDevinModel] = useState<string>('');
+  // Lane D3: one choice per family — the selected family base id and its level.
+  const [devinFamily, setDevinFamily] = useState<string>('');
+  const [devinLevel, setDevinLevel] = useState<string | null>(null);
   const [piModel, setPiModel] = useState('');
   const [piModelsLoading, setPiModelsLoading] = useState(false);
   const [claudeModels, setClaudeModels] = useState<ClaudeModelEntry[]>([]);
@@ -217,26 +220,36 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   }, [isOpen, sdkType, piModels.length]);
 
   // Fetch the Devin catalogue when the Devin session type is chosen. The
-  // picker shows EVERY model (ruling 01: no allow-list); each entry's pricing
-  // flags what the CLI reports as free.
+  // picker shows one entry per FAMILY (lane D3) — the raw per-variant entries
+  // are grouped client-side; each family's pricing flags what the CLI reports
+  // as free.
   useEffect(() => {
     if (!isOpen || sdkType !== 'devin' || devinModels.length > 0) return;
     let cancelled = false;
     setDevinModelsLoading(true);
     api.get('/api/models?sdkType=devin')
       .then((resp) => {
-        if (!cancelled) setDevinModels((resp as { models?: Array<{ id: string; name?: string; pricing?: { free: boolean; raw: string; costTier?: string }; thinkingLevels?: string[] }> }).models || []);
+        if (!cancelled) setDevinModels((resp as { models?: DevinCatalogModel[] }).models || []);
       })
       .catch((err) => console.error('Failed to fetch Devin models:', err))
       .finally(() => setDevinModelsLoading(false));
     return () => { cancelled = true; };
   }, [isOpen, sdkType, devinModels.length]);
 
+  // Lane D3: the family list — one entry per Devin model family, catalogue
+  // order preserved.
+  const devinFamilies = useMemo(() => groupDevinModelsByFamily(devinModels), [devinModels]);
+  const selectedDevinFamily = devinFamilies.find((f) => f.family === devinFamily) ?? null;
+
+  // Default to the first free family once the catalogue is in; a selection the
+  // user made is never re-derived or snapped back.
   useEffect(() => {
     if (sdkType !== 'devin') return;
-    if (devinModel && devinModels.some((m) => m.id === devinModel)) return;
-    setDevinModel(devinModels.find((m) => m.pricing?.free)?.id ?? devinModels[0]?.id ?? '');
-  }, [sdkType, devinModels, devinModel]);
+    if (devinFamily && devinFamilies.some((f) => f.family === devinFamily)) return;
+    const firstFree = devinFamilies.find((f) => f.free) ?? devinFamilies[0] ?? null;
+    setDevinFamily(firstFree?.family ?? '');
+    setDevinLevel(firstFree?.defaultLevel ?? null);
+  }, [sdkType, devinFamilies, devinFamily]);
 
   // Fetch Claude models/profiles when the Claude session type is chosen so the
   // user can pick a backend/provider profile (e.g. GLM 5.3 via SDK) before the
@@ -305,7 +318,13 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
   const selectedModelArg = () => {
     if (sdkType === 'pi') return piModel || undefined;
     if (sdkType === 'commandcode') return selectedCommandCodeModel?.id || commandCodeModels[0]?.id;
-    if (sdkType === 'devin') return devinModel || devinModels[0]?.id;
+    if (sdkType === 'devin') {
+      // Lane D3: the request sends the RESOLVED variant id (family + level).
+      if (selectedDevinFamily) return resolveDevinVariantId(selectedDevinFamily, devinLevel);
+      return devinFamilies[0]
+        ? resolveDevinVariantId(devinFamilies[0], devinFamilies[0].defaultLevel)
+        : undefined;
+    }
     return claudeModelArg();
   };
 
@@ -596,7 +615,9 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
           )}
 
           {/* Command Code model + native effort selector */}
-          {/* Devin model selector (whole catalogue; pricing is informational) */}
+          {/* Devin model selector: one entry per FAMILY (lane D3) plus a
+              level dropdown when the family has more than one level. The
+              create request sends the resolved variant id. */}
           {sdkType === 'devin' && (
             <div className="mt-2 space-y-2" data-testid="devin-model-selector">
               <div>
@@ -607,28 +628,38 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                   </div>
                 ) : (
                   <select
-                    value={devinModel}
-                    onChange={(e) => setDevinModel(e.target.value)}
+                    value={devinFamily}
+                    onChange={(e) => {
+                      const next = devinFamilies.find((f) => f.family === e.target.value);
+                      setDevinFamily(e.target.value);
+                      setDevinLevel(next?.defaultLevel ?? null);
+                    }}
                     data-testid="devin-model-select"
                     className="w-full px-3 py-2 bg-surface-subtle dark:bg-surface-dark-subtle rounded-xl text-sm text-content-primary dark:text-content-primary-dark border border-outline-default dark:border-outline-default-dark focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500/30"
                   >
-                    {devinModels.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.name || model.id}{model.pricing?.free ? ' • free' : ''}
+                    {devinFamilies.map((family) => (
+                      <option key={family.family} value={family.family}>
+                        {family.name}{family.free ? ' • free' : ''}
                       </option>
                     ))}
                   </select>
                 )}
               </div>
-              {(() => {
-                const selected = devinModels.find((m) => m.id === devinModel);
-                if (!selected || (selected.thinkingLevels ?? []).length === 0) return null;
-                return (
-                  <p className="text-xs text-content-muted dark:text-content-muted-dark">
-                    Thinking levels for this model: {(selected.thinkingLevels ?? []).join(', ')} — switch after creation from the session header.
-                  </p>
-                );
-              })()}
+              {selectedDevinFamily && selectedDevinFamily.levels.length > 1 && (
+                <div>
+                  <p className="text-xs font-medium text-content-secondary dark:text-content-secondary-dark mb-1.5">Thinking level</p>
+                  <select
+                    value={devinLevel ?? selectedDevinFamily.defaultLevel ?? selectedDevinFamily.levels[0]}
+                    onChange={(e) => setDevinLevel(e.target.value)}
+                    data-testid="devin-level-select"
+                    className="w-full px-3 py-2 bg-surface-subtle dark:bg-surface-dark-subtle rounded-xl text-sm text-content-primary dark:text-content-primary-dark border border-outline-default dark:border-outline-default-dark focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500/30"
+                  >
+                    {selectedDevinFamily.levels.map((level) => (
+                      <option key={level} value={level}>{level}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
           )}
 

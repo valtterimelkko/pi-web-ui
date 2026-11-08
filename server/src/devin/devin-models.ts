@@ -75,6 +75,12 @@ export interface DevinModelEntry {
   contextWindow?: number;
   isNew?: boolean;
   isBeta?: boolean;
+  /** Lane D3: the family base id (the id minus its trailing level token),
+   *  or the id itself when the model has no level axis. */
+  family: string;
+  /** Lane D3: display name without the level word (e.g. "SWE-2 Flash");
+   *  axis-less models keep their own label. */
+  familyName: string;
 }
 
 /** The level tokens a sibling id may end with (plan D4, frozen). */
@@ -92,6 +98,28 @@ function levelOf(modelUid: string): Level | null {
   if (idx < 0) return null;
   const token = modelUid.slice(idx + 1);
   return isLevelToken(token) ? token : null;
+}
+
+/** Lane D3: the family base id — the id minus its trailing level token when
+ *  it ends in one, else the id itself (axis-less models are their own family). */
+export function devinFamilyBase(modelUid: string): string {
+  const level = levelOf(modelUid);
+  return level === null ? modelUid : modelUid.slice(0, modelUid.length - level.length - 1);
+}
+
+/** Lane D3: the display name without the level word. The catalogue labels
+ *  end with the capitalised level token for levelled variants ("SWE-2 Flash
+ *  Medium"); strip that word only when it matches the model's own level
+ *  (case-insensitive), keeping the label unchanged otherwise. */
+export function devinFamilyName(label: string, modelUid: string): string {
+  const level = levelOf(modelUid);
+  if (level === null) return label;
+  const words = label.split(/\s+/);
+  const last = words[words.length - 1] ?? '';
+  if (words.length > 1 && last.toLowerCase() === level.toLowerCase()) {
+    return words.slice(0, -1).join(' ');
+  }
+  return label;
 }
 
 /**
@@ -135,6 +163,8 @@ export function toDevinCatalogEntries(families: DevinModelsFamily[]): DevinModel
     ...(v.max_context_tokens !== undefined ? { contextWindow: v.max_context_tokens } : {}),
     ...(v.is_new ? { isNew: true } : {}),
     ...(v.is_beta ? { isBeta: true } : {}),
+    family: devinFamilyBase(v.model_uid),
+    familyName: devinFamilyName(v.label, v.model_uid),
   }));
 }
 
@@ -172,4 +202,70 @@ export function resolveDevinLevelSwap(
   if (currentLevel === null) return { ok: false, reason: `model "${current.id}" has no thinking-level axis` };
   const base = current.id.slice(0, current.id.length - currentLevel.length - 1);
   return { ok: true, slug: `${base}-${level}` };
+}
+
+export type DevinCreateModelResolution =
+  | { ok: true; modelId: string; levelApplied?: string; noLevelAxis?: boolean }
+  | { ok: false; reason: string };
+
+/** Lane D3: create-time model+level resolution (design frozen, 2026-11-08).
+ *
+ *  - A variant id plus a `thinkingLevel` resolves to its sibling id via
+ *    {@link resolveDevinLevelSwap}; a level the family does not have fails
+ *    with a reason naming the available levels (callers answer 400, never
+ *    substitute).
+ *  - A family base id (the catalogue id minus its trailing level token) is
+ *    accepted: it resolves to `<base>-<level>` with the requested level, else
+ *    `medium` when the family has it, else the family's lowest level.
+ *  - An axis-less model (`*-lightning`, a fusion id, a lone catalogue id)
+ *    creates unchanged; when a level was requested the result carries
+ *    `noLevelAxis` so callers can attach a `thinkingLevelNote`.
+ *  - Unknown ids keep today's passthrough (the runtime refuses them at
+ *    first use; never a substitution here).
+ *
+ *  An exact catalogue id always wins over family resolution: a model that
+ *  exists under the base name is that model, never a ladder.
+ *  An empty/unavailable catalogue behaves like unknown ids: passthrough. */
+export function resolveDevinCreateModel(
+  requested: string | undefined,
+  thinkingLevel: string | undefined,
+  catalogue: DevinModelEntry[],
+  defaultModel: string,
+): DevinCreateModelResolution {
+  const modelId = requested ?? defaultModel;
+  const exact = catalogue.find((m) => m.id === modelId);
+  if (exact) {
+    if (!thinkingLevel) return { ok: true, modelId: exact.id };
+    if (exact.thinkingLevels.length === 0) {
+      return { ok: true, modelId: exact.id, noLevelAxis: true };
+    }
+    const swap = resolveDevinLevelSwap(exact, thinkingLevel, catalogue);
+    return swap.ok
+      ? { ok: true, modelId: swap.slug, levelApplied: thinkingLevel }
+      : swap;
+  }
+  // Family resolution: any levelled catalogue entries sharing the base id.
+  const familyVariants = catalogue.filter(
+    (m) => m.thinkingLevels.length > 0 && devinFamilyBase(m.id) === modelId,
+  );
+  if (familyVariants.length === 0) {
+    return { ok: true, modelId }; // unknown id: today's passthrough
+  }
+  const levels = [...new Set(familyVariants.flatMap((m) => m.thinkingLevels))]
+    .sort((a, b) => {
+      const ia = LEVEL_ORDER[a as Level];
+      const ib = LEVEL_ORDER[b as Level];
+      return (ia ?? 0) - (ib ?? 0);
+    });
+  if (!thinkingLevel) {
+    const target = levels.includes('medium') ? 'medium' : levels[0];
+    return { ok: true, modelId: `${modelId}-${target}`, levelApplied: target };
+  }
+  if (!levels.includes(thinkingLevel)) {
+    return {
+      ok: false,
+      reason: `thinking level "${thinkingLevel}" not available for "${modelId}" (available: ${levels.join(', ')})`,
+    };
+  }
+  return { ok: true, modelId: `${modelId}-${thinkingLevel}`, levelApplied: thinkingLevel };
 }

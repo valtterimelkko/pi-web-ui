@@ -21,6 +21,7 @@ import type { PiService } from '../../pi/pi-service.js';
 import { CommandCodeRuntimeError, type CommandCodeService } from '../../command-code/command-code-service.js';
 import { commandCodeEventsToScreenEvents } from '../../command-code/command-code-event-adapter.js';
 import type { DevinService } from '../../devin/devin-service.js';
+import { resolveDevinCreateModel, type DevinModelEntry } from '../../devin/devin-models.js';
 import type { CommandCodeInternalSessionRecord } from '../../command-code/command-code-session-store.js';
 import type {
   CreateSessionRequest,
@@ -2147,14 +2148,27 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
             sendJson(res, 503, enrichedErrorBody(ErrorCode.RUNTIME_UNAVAILABLE, 'Devin runtime is disabled or unavailable'));
             return;
           }
-          const { sessionId } = await devinService.createSession(cwd, body.model);
+          // Lane D3: create honours the requested thinking level (sibling-model
+          // swap, plan D4) and accepts a family base id. An unavailable level is
+          // a 400 naming the available levels — never a substituted default.
+          // An axis-less model creates unchanged with a thinkingLevelNote.
+          const devinCatalogue = ((await devinService.getAvailableModels?.().catch(() => [])) ?? []) as DevinModelEntry[];
+          const devinResolution = resolveDevinCreateModel(body.model, body.thinkingLevel, devinCatalogue, config.devinDefaultModel);
+          if (!devinResolution.ok) {
+            sendJson(res, 400, enrichedErrorBody(ErrorCode.INVALID_REQUEST, devinResolution.reason));
+            return;
+          }
+          const { sessionId } = await devinService.createSession(cwd, devinResolution.modelId);
           base = {
             sessionId,
             sessionPath: sessionId,
             runtime: 'devin',
-            model: body.model,
+            model: devinResolution.modelId,
             cwd,
             createdAt: new Date().toISOString(),
+            ...(devinResolution.noLevelAxis
+              ? { thinkingLevelNote: `model '${devinResolution.modelId}' has no thinking-level axis; created unchanged (requested level '${body.thinkingLevel}' is not applicable)` }
+              : {}),
           };
           break;
         }
@@ -8611,6 +8625,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           effort: created.effort as BatchCreateResultItem['effort'],
           defaultEffort: created.defaultEffort,
           cwd: created.cwd,
+          ...(created.thinkingLevelNote ? { thinkingLevelNote: created.thinkingLevelNote } : {}),
           ...(agentOsCaptureStored ? { agentOsCapture: agentOsCaptureStored } : {}),
           ...(entrySessionClass ? { sessionClass: entrySessionClass } : {}),
           ...(batchLink ? { parentSessionId: batchLink.parentSessionId, parentSource: batchLink.parentSource } : {}),
