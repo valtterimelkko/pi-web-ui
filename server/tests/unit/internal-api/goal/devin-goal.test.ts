@@ -1,0 +1,665 @@
+/**
+ * Devin goal function (contract 1.68.0) — server-side goal manager.
+ *
+ * Devin's ACP surface exposes no /goal contract, so the devin goal — exactly
+ * like the antigravity goal (contract 1.38.0, whose module this mirrors with
+ * Devin names) — is fully server-owned: a per-session control store plus a
+ * turn-driven auto-continue sweeper (verification and continuation both live
+ * in this process).
+ */
+import { describe, expect, it } from 'vitest';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import {
+  DEVIN_GOAL_SENTINEL,
+  type DevinGoalRecord,
+  DevinGoalControlStore,
+  type DevinGoalAutoContinueConfig,
+  type DevinGoalSweeperDeps,
+  buildDevinGoalContinuationPrompt,
+  buildDevinGoalStartPrompt,
+  createDevinGoalSweeper,
+  loadDevinGoalAutoContinueConfig,
+  parseDevinGoalCommand,
+  projectDevinGoal,
+  verifyDevinGoalTurn,
+} from '../../../../src/internal-api/goal/devin-goal.js';
+
+// ─── parseDevinGoalCommand ─────────────────────────────────────────────────────
+
+describe('parseDevinGoalCommand', () => {
+  it('parses a bare objective as start', () => {
+    const parsed = parseDevinGoalCommand('/goal Fix all lint errors');
+    expect(parsed).toEqual({ kind: 'start', objective: 'Fix all lint errors', verifyCommand: undefined });
+  });
+
+  it('strips one wrapping pair of quotes from the objective', () => {
+    const parsed = parseDevinGoalCommand('/goal "Fix all lint errors"');
+    expect(parsed).toEqual({ kind: 'start', objective: 'Fix all lint errors', verifyCommand: undefined });
+  });
+
+  it('parses --verify with a quoted command before the objective', () => {
+    const parsed = parseDevinGoalCommand('/goal --verify "npm run lint" Fix all lint errors');
+    expect(parsed).toEqual({ kind: 'start', objective: 'Fix all lint errors', verifyCommand: 'npm run lint' });
+  });
+
+  it('parses --verify= single-token form', () => {
+    const parsed = parseDevinGoalCommand('/goal --verify=make-check Fix lint');
+    expect(parsed).toEqual({ kind: 'start', objective: 'Fix lint', verifyCommand: 'make-check' });
+  });
+
+  it('maps control verbs (spaced, hyphenated, pause-now)', () => {
+    expect(parseDevinGoalCommand('/goal pause')).toEqual({ kind: 'pause' });
+    expect(parseDevinGoalCommand('/goal pause-now')).toEqual({ kind: 'pause' });
+    expect(parseDevinGoalCommand('/goal-pause')).toEqual({ kind: 'pause' });
+    expect(parseDevinGoalCommand('/goal resume')).toEqual({ kind: 'resume' });
+    expect(parseDevinGoalCommand('/goal continue')).toEqual({ kind: 'resume' });
+    expect(parseDevinGoalCommand('/goal clear')).toEqual({ kind: 'clear' });
+    expect(parseDevinGoalCommand('/goal stop')).toEqual({ kind: 'clear' });
+    expect(parseDevinGoalCommand('/goal status')).toEqual({ kind: 'status' });
+    expect(parseDevinGoalCommand('/goal')).toEqual({ kind: 'status' });
+  });
+
+  it('returns null for non-goal prompts and near-misses', () => {
+    expect(parseDevinGoalCommand('hello world')).toBeNull();
+    expect(parseDevinGoalCommand('/goals list')).toBeNull();
+    expect(parseDevinGoalCommand('/goalist')).toBeNull();
+    expect(parseDevinGoalCommand('/goalverbose')).toBeNull();
+  });
+
+  it('preserves objective case and tolerates padded input', () => {
+    const parsed = parseDevinGoalCommand('  /goal   Ship the MiXeD-case Release  ');
+    expect(parsed).toEqual({ kind: 'start', objective: 'Ship the MiXeD-case Release', verifyCommand: undefined });
+  });
+});
+
+// ─── control store ───────────────────────────────────────────────────────────
+
+describe('DevinGoalControlStore', () => {
+  it('answers null for sessions without a record and round-trips patches', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'devin-goal-'));
+    const store = new DevinGoalControlStore(dir);
+    await expect(store.get('s1')).resolves.toBeNull();
+
+    const patched = await store.patch('s1', { objective: 'Ship it', status: 'running', runs: 0, maxRuns: 100, createdAt: 1, updatedAt: 2, autoContinue: true });
+    expect(patched.status).toBe('running');
+    const raw = JSON.parse(await readFile(path.join(dir, 's1.json'), 'utf8'));
+    expect(raw.objective).toBe('Ship it');
+    await expect(store.get('s1')).resolves.toMatchObject({ objective: 'Ship it' });
+
+    const again = await store.patch('s1', { runs: 3 });
+    expect(again.runs).toBe(3);
+    expect(again.objective).toBe('Ship it');
+  });
+});
+
+// ─── projection ──────────────────────────────────────────────────────────────
+
+describe('projectDevinGoal', () => {
+  it('projects idle (supported) when no record exists', () => {
+    expect(projectDevinGoal(null)).toEqual({ supported: true, status: 'idle' });
+  });
+
+  it('projects a running goal with verification and budget', () => {
+    const record: DevinGoalRecord = {
+      objective: 'Ship it',
+      maxRuns: 100,
+      status: 'running',
+      runs: 4,
+      autoContinue: true,
+      createdAt: 10,
+      updatedAt: 20,
+      verification: { status: 'self_reported', message: 'not yet' },
+      lastReason: 'not yet',
+    };
+    const projection = projectDevinGoal(record);
+    expect(projection).toMatchObject({
+      supported: true,
+      status: 'running',
+      objective: 'Ship it',
+      runs: 4,
+      maxRuns: 100,
+      verification: { status: 'self_reported', message: 'not yet' },
+      lastReason: 'not yet',
+      autoContinue: true,
+    });
+  });
+
+  it('projects achieved with completedAt and paused with reason', () => {
+    const done: DevinGoalRecord = {
+      objective: 'Ship it', maxRuns: 100, status: 'achieved', runs: 2, autoContinue: true,
+      createdAt: 1, updatedAt: 5, completedAt: 6, verification: { status: 'passed' },
+    };
+    expect(projectDevinGoal(done)).toMatchObject({ status: 'achieved', completedAt: 6 });
+
+    const paused: DevinGoalRecord = { ...done, status: 'paused', pausedReason: 'user', completedAt: null };
+    expect(projectDevinGoal(paused)).toMatchObject({ status: 'paused', pausedReason: 'user' });
+  });
+});
+
+// ─── prompts + sentinel ──────────────────────────────────────────────────────
+
+describe('goal prompts', () => {
+  it('start prompt carries the objective and the sentinel only without verifyCommand', () => {
+    const withVerify = buildDevinGoalStartPrompt('Ship it', true);
+    expect(withVerify).toContain('Ship it');
+    expect(withVerify).not.toContain(DEVIN_GOAL_SENTINEL);
+
+    const selfReport = buildDevinGoalStartPrompt('Ship it', false);
+    expect(selfReport).toContain(DEVIN_GOAL_SENTINEL);
+  });
+
+  it('continuation prompt is request-shaped and sentinel-aware', () => {
+    const withVerify = buildDevinGoalContinuationPrompt('Ship it', true);
+    expect(withVerify).toContain('Ship it');
+    expect(withVerify).not.toContain(DEVIN_GOAL_SENTINEL);
+    expect(buildDevinGoalContinuationPrompt('Ship it', false)).toContain(DEVIN_GOAL_SENTINEL);
+  });
+});
+
+// ─── verification ────────────────────────────────────────────────────────────
+
+describe('verifyDevinGoalTurn', () => {
+  it('command verifier: exit 0 passes, non-zero fails', async () => {
+    const pass = await verifyDevinGoalTurn({ verifyCommand: 'exit 0', response: '', cwd: tmpdir(), timeoutMs: 5000 });
+    expect(pass).toEqual({ met: true, verification: { status: 'passed', command: 'exit 0', message: null } });
+
+    const fail = await verifyDevinGoalTurn({ verifyCommand: 'exit 3', response: '', cwd: tmpdir(), timeoutMs: 5000 });
+    expect(fail.met).toBe(false);
+    expect(fail.verification.status).toBe('failed');
+    expect(fail.verification.command).toBe('exit 3');
+  });
+
+  it('command verifier timeouts report failed with a message', async () => {
+    const result = await verifyDevinGoalTurn({ verifyCommand: 'sleep 2', response: '', cwd: tmpdir(), timeoutMs: 200 });
+    expect(result.met).toBe(false);
+    expect(result.verification.status).toBe('failed');
+    expect(result.verification.message).toContain('timed out');
+  });
+
+  it('sentinel scan self-reports achievement and stays honest otherwise', async () => {
+    const met = await verifyDevinGoalTurn({ response: `All done.\n${DEVIN_GOAL_SENTINEL}`, cwd: tmpdir(), timeoutMs: 1000 });
+    expect(met).toEqual({ met: true, verification: { status: 'self_reported', command: null, message: 'model self-reported goal achievement' } });
+
+    const unmet = await verifyDevinGoalTurn({ response: 'Still working on it.', cwd: tmpdir(), timeoutMs: 1000 });
+    expect(unmet).toEqual({ met: false, verification: { status: 'not_run', command: null, message: null } });
+  });
+
+  it('prefers the command verifier when both are available', async () => {
+    const result = await verifyDevinGoalTurn({
+      verifyCommand: 'exit 1',
+      response: DEVIN_GOAL_SENTINEL,
+      cwd: tmpdir(),
+      timeoutMs: 5000,
+    });
+    expect(result.met).toBe(false);
+    expect(result.verification.status).toBe('failed');
+  });
+});
+
+// ─── sweeper ─────────────────────────────────────────────────────────────────
+
+function record(overrides: Partial<DevinGoalRecord> = {}): DevinGoalRecord {
+  return {
+    objective: 'Ship it',
+    maxRuns: 3,
+    status: 'running',
+    runs: 0,
+    autoContinue: true,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  };
+}
+
+interface SweeperHarness {
+  events: Array<{ sessionId: string; event: { type: string; data?: Record<string, unknown> } }>;
+  dispatched: Array<{ sessionId: string; message: string }>;
+  store: DevinGoalControlStore;
+  dir: string;
+  turns: Map<string, { completedAt: number; response: string; status?: 'done' | 'error'; error?: string } | null>;
+  running: Set<string>;
+  deps: DevinGoalSweeperDeps;
+}
+
+async function harness(records: Record<string, DevinGoalRecord>, config: Partial<DevinGoalAutoContinueConfig> = {}): Promise<SweeperHarness> {
+  const dir = await mkdtemp(path.join(tmpdir(), 'devin-sweep-'));
+  const store = new DevinGoalControlStore(dir);
+  for (const [sessionId, rec] of Object.entries(records)) await store.patch(sessionId, rec);
+  const h: SweeperHarness = {
+    events: [],
+    dispatched: [],
+    store,
+    dir,
+    turns: new Map(),
+    running: new Set(),
+    deps: undefined as unknown as DevinGoalSweeperDeps,
+  };
+  h.deps = {
+    config: { enabled: true, sweepIntervalMs: 1000, maxRuns: 3, verifyTimeoutMs: 1000, ...config },
+    now: () => 1000,
+    listGoalSessions: async () => Object.keys(records),
+    isRunning: (id) => h.running.has(id),
+    getStore: () => store,
+    readLastCompletedTurn: async (id) => h.turns.get(id) ?? null,
+    sessionCwd: async (id) => tmpdir(),
+    dispatch: async (id, message) => { h.dispatched.push({ sessionId: id, message }); },
+    verify: async (rec, turn) => verifyDevinGoalTurn({ response: turn.response, cwd: tmpdir(), timeoutMs: 1000, verifyCommand: rec.verifyCommand }),
+    publish: (sessionId, event) => { h.events.push({ sessionId, event }); },
+  };
+  return h;
+}
+
+describe('createDevinGoalSweeper', () => {
+  it('verifies the newly completed turn and achieves on the sentinel', async () => {
+    const h = await harness({ s1: record({ lastVerifiedTurnAt: 0 }) });
+    h.turns.set('s1', { completedAt: 500, response: `done\n${DEVIN_GOAL_SENTINEL}` });
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'achieved', runs: 1, completedAt: 1000, lastVerifiedTurnAt: 500 });
+    expect(h.dispatched).toEqual([]);
+    expect(h.events.map((e) => e.event.type)).toEqual(['goal_state', 'goal_end']);
+  });
+
+  it('continues on an unmet turn within budget and records the verification', async () => {
+    const h = await harness({ s1: record() });
+    h.turns.set('s1', { completedAt: 400, response: 'still working' });
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 1, lastVerifiedTurnAt: 400 });
+    expect(h.dispatched).toHaveLength(1);
+    expect(h.dispatched[0].message).toContain('Ship it');
+    expect(h.dispatched[0].message).toContain(DEVIN_GOAL_SENTINEL);
+    expect(h.events.map((e) => e.event.type)).toEqual(['goal_state']);
+  });
+
+  it('marks failed/budget at the run ceiling and emits goal_end once', async () => {
+    const h = await harness({ s1: record({ runs: 2, maxRuns: 3 }) });
+    h.turns.set('s1', { completedAt: 900, response: 'still working' });
+    const sweeper = createDevinGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'failed', pausedReason: 'budget', runs: 3 });
+    expect(h.dispatched).toEqual([]);
+    expect(h.events.map((e) => e.event.type)).toEqual(['goal_state', 'goal_end']);
+
+    // Terminal state: a re-sweep must not re-emit or re-dispatch.
+    await sweeper.sweepOnce();
+    expect(h.events).toHaveLength(2);
+    expect(h.dispatched).toEqual([]);
+  });
+
+  it('skips busy sessions, paused/cleared goals, and already-verified turns', async () => {
+    const h = await harness({
+      busy: record(),
+      paused: record({ status: 'paused', pausedReason: 'user', autoContinue: false }),
+      done: record({ status: 'achieved' }),
+      stale: record({ lastVerifiedTurnAt: 250 }),
+    });
+    h.running.add('busy');
+    h.turns.set('busy', { completedAt: 10, response: 'x' });
+    h.turns.set('paused', { completedAt: 10, response: DEVIN_GOAL_SENTINEL });
+    h.turns.set('done', { completedAt: 10, response: DEVIN_GOAL_SENTINEL });
+    h.turns.set('stale', { completedAt: 200, response: DEVIN_GOAL_SENTINEL });
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+
+    expect(h.dispatched).toEqual([]);
+    expect(h.events).toEqual([]);
+    expect(await h.store.get('paused')).toMatchObject({ status: 'paused' });
+    expect(await h.store.get('stale')).toMatchObject({ runs: 0, lastVerifiedTurnAt: 250 });
+  });
+
+  it('resumes paused goals only via autoContinue re-arm + a fresh turn', async () => {
+    const h = await harness({ s1: record({ status: 'paused', pausedReason: 'user', autoContinue: false }) });
+    h.turns.set('s1', { completedAt: 300, response: DEVIN_GOAL_SENTINEL });
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+    expect(h.events).toEqual([]);
+
+    await h.store.patch('s1', { status: 'running', pausedReason: undefined, autoContinue: true });
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+    expect(await h.store.get('s1')).toMatchObject({ status: 'achieved' });
+  });
+
+  it('does nothing when disabled', async () => {
+    const h = await harness({ s1: record() }, { enabled: false });
+    h.turns.set('s1', { completedAt: 10, response: DEVIN_GOAL_SENTINEL });
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+    expect(h.events).toEqual([]);
+    expect(h.dispatched).toEqual([]);
+    expect(await h.store.get('s1')).toMatchObject({ status: 'running', runs: 0 });
+  });
+});
+
+// ─── provider-error strikes (contract 1.58.3) ────────────────────────────────
+
+/** Real error strings from the H2s Gemini session `cefdf34a-abf7-441f-b075-5af3d980c1b1`
+ *  (2026-10-01): every one of its 27 turns was finalized `status: "error"` and the
+ *  old sweeper continued into each one as if it were an ordinary unmet turn. */
+const AGY_H2S_ERROR_500 = 'INTERNAL (code 500): Internal error encountered.';
+const AGY_H2S_ERROR_503 =
+  'Our servers are experiencing high traffic right now, please try again in a minute. (UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-high on the server)';
+
+describe('createDevinGoalSweeper — provider-error strikes (contract 1.58.3)', () => {
+  it('counts a provider-error turn as a strike instead of consuming a run, and retries', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 0, consecutiveErrors: 1, lastVerifiedTurnAt: 500 });
+    expect(after?.lastReason).toContain(AGY_H2S_ERROR_500);
+    // One retry continuation (Pi's three-strike rule retries between strikes),
+    // not an ordinary unmet-turn advance.
+    expect(h.dispatched).toHaveLength(1);
+    expect(h.events.map((e) => e.event.type)).toEqual(['goal_state']);
+    expect(h.events[0].event.data).toMatchObject({ status: 'running', runs: 0, pausedReason: null });
+  });
+
+  it('pauses after three consecutive strikes with pausedReason error, naming the last error, and dispatches nothing further', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    const sweeper = createDevinGoalSweeper(h.deps);
+    h.turns.set('s1', { completedAt: 100, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    await sweeper.sweepOnce();
+    h.turns.set('s1', { completedAt: 200, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
+    await sweeper.sweepOnce();
+    h.turns.set('s1', { completedAt: 300, response: 'timeout', status: 'error', error: 'timeout' });
+    await sweeper.sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'paused', pausedReason: 'error', runs: 0, lastVerifiedTurnAt: 300 });
+    expect(after?.lastReason).toContain('timeout');
+    expect(after?.lastReason).toMatch(/3 consecutive provider errors/);
+    // Only the two retries; the pausing strike dispatches nothing.
+    expect(h.dispatched).toHaveLength(2);
+
+    const pausedEvent = h.events.map((e) => e.event).find((e) => e.data?.status === 'paused');
+    expect(pausedEvent).toMatchObject({
+      type: 'goal_state',
+      data: { status: 'paused', pausedReason: 'error', lastReason: expect.stringContaining('timeout') },
+    });
+    expect(h.events.some((e) => e.event.type === 'goal_end')).toBe(false);
+
+    // A re-sweep of the same turn neither re-pauses nor dispatches again.
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(2);
+  });
+
+  it('a refused retry does not consume the strike: the next sweep retries the same turn exactly once', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    let attempts = 0;
+    h.deps.dispatch = async (id, message) => {
+      attempts += 1;
+      // The live race: the route's admission lease can outlive the turn's
+      // finalisation, so an immediate continuation is refused 409.
+      if (attempts === 1) throw new Error('goal continuation dispatch failed (409)');
+      h.dispatched.push({ sessionId: id, message });
+    };
+    h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    const sweeper = createDevinGoalSweeper(h.deps);
+
+    await sweeper.sweepOnce();
+    const refused = await h.store.get('s1');
+    expect(refused?.consecutiveErrors).toBeUndefined();
+    expect(refused?.lastVerifiedTurnAt).toBeUndefined();
+    expect(h.dispatched).toHaveLength(0);
+
+    // The next sweep retries the SAME turn and records the strike exactly once.
+    await sweeper.sweepOnce();
+    const recovered = await h.store.get('s1');
+    expect(recovered).toMatchObject({ status: 'running', runs: 0, consecutiveErrors: 1, lastVerifiedTurnAt: 500 });
+    expect(h.dispatched).toHaveLength(1);
+
+    // And the strike is not double-counted on a further sweep.
+    await sweeper.sweepOnce();
+    expect((await h.store.get('s1'))?.consecutiveErrors).toBe(1);
+  });
+
+  it('a successful turn resets the strike count and clears the stale error note', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    const sweeper = createDevinGoalSweeper(h.deps);
+    h.turns.set('s1', { completedAt: 100, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    await sweeper.sweepOnce();
+    h.turns.set('s1', { completedAt: 200, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
+    await sweeper.sweepOnce();
+    h.turns.set('s1', { completedAt: 300, response: 'still working on the goal' });
+    await sweeper.sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 1, consecutiveErrors: 0, lastVerifiedTurnAt: 300 });
+    expect(after?.lastReason ?? null).toBeNull();
+    expect(h.dispatched).toHaveLength(3); // 2 retries + the ordinary unmet continuation
+  });
+
+  it('resume re-arms: a resumed goal starts a fresh strike cycle', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    const sweeper = createDevinGoalSweeper(h.deps);
+    for (const at of [100, 200, 300]) {
+      h.turns.set('s1', { completedAt: at, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+      await sweeper.sweepOnce();
+    }
+    expect((await h.store.get('s1'))?.status).toBe('paused');
+
+    // Exactly what the route's resume action patches (sessions.ts): status running,
+    // pause reason cleared, auto-continue armed again.
+    await h.store.patch('s1', { status: 'running', pausedReason: undefined, autoContinue: true });
+    h.turns.set('s1', { completedAt: 400, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
+    await sweeper.sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', consecutiveErrors: 1 });
+    expect(h.dispatched).toHaveLength(3); // the resumed cycle's strike 1 retries rather than re-pausing
+  });
+
+  it('classifies by the reader truth, not response text: a done turn mentioning an error is an ordinary turn', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: `Not yet done. Note: earlier we saw ${AGY_H2S_ERROR_500}`, status: 'done' });
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 1, consecutiveErrors: 0 });
+    expect(h.dispatched).toHaveLength(1);
+  });
+
+  it('treats legacy turns (no status field) as successful turns, exactly as before', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: 'legacy response' });
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 1, consecutiveErrors: 0 });
+  });
+});
+
+// ─── config ──────────────────────────────────────────────────────────────────
+
+describe('createDevinGoalSweeper — server cut-off turns (ceiling fix)', () => {
+  it.each(['timeout', 'stall'])('a %s cut-off still counts as a strike, but its continuation tells the model it was cut off', async (cut) => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: cut, status: 'error', error: cut });
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+
+    expect(await h.store.get('s1')).toMatchObject({ status: 'running', consecutiveErrors: 1 });
+    expect(h.dispatched).toHaveLength(1);
+    const msg = h.dispatched[0].message;
+    expect(msg).toContain('Ship it');
+    expect(msg).toMatch(/cut off/i);
+    expect(msg).toMatch(/commit|save/i);
+  });
+
+  it('an ordinary provider error does not claim a cut-off', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+    expect(h.dispatched[0].message).not.toMatch(/cut off/i);
+  });
+
+  it('buildDevinGoalContinuationPrompt adds the cut-off note only when asked', () => {
+    expect(buildDevinGoalContinuationPrompt('Ship it', true, { cutOff: true })).toMatch(/cut off/i);
+    expect(buildDevinGoalContinuationPrompt('Ship it', true)).not.toMatch(/cut off/i);
+  });
+});
+
+describe('createDevinGoalSweeper — resume continuation that could not dispatch (contract 1.58.3 review)', () => {
+  it('dispatches a pending continuation for an already-verified turn and clears the flag only once accepted', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+    h.turns.set('s1', { completedAt: 300, response: 'provider error', status: 'error', error: 'provider error' });
+    let refuse = true;
+    h.deps.dispatch = async (id, message) => {
+      if (refuse) throw new Error('goal continuation dispatch failed (409)');
+      h.dispatched.push({ sessionId: id, message });
+    };
+    const sweeper = createDevinGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+    expect(await h.store.get('s1')).toMatchObject({ status: 'running', pendingContinuation: true, lastVerifiedTurnAt: 300 });
+    expect(h.dispatched).toHaveLength(0);
+
+    refuse = false;
+    await sweeper.sweepOnce();
+    const after = await h.store.get('s1');
+    expect(after?.pendingContinuation).toBeFalsy();
+    expect(after).toMatchObject({ status: 'running', lastVerifiedTurnAt: 300 });
+    expect(after?.consecutiveErrors ?? 0).toBe(0);
+    expect(h.dispatched).toHaveLength(1);
+    expect(h.dispatched[0].message).toContain('Ship it');
+
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(1);
+  });
+
+  it('a newer completed turn supersedes a pending continuation (processed once, no extra dispatch)', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+    h.turns.set('s1', { completedAt: 400, response: 'still working' });
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+    const after = await h.store.get('s1');
+    expect(after?.pendingContinuation).toBeFalsy();
+    expect(after).toMatchObject({ status: 'running', runs: 1, lastVerifiedTurnAt: 400 });
+    expect(h.dispatched).toHaveLength(1);
+  });
+
+  it('re-checks the goal before dispatching: a pause or clear that lands during the turn read wins (review r2)', async () => {
+    for (const action of ['pause', 'clear', 'start'] as const) {
+      const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+      h.turns.set('s1', { completedAt: 300, response: 'x' });
+      h.deps.readLastCompletedTurn = async (id) => {
+        if (action === 'pause') await h.store.patch(id, { status: 'paused', pausedReason: 'user', autoContinue: false });
+        if (action === 'clear') await h.store.patch(id, { status: 'cleared', autoContinue: false, clearedAt: 1 });
+        if (action === 'start') await h.store.patch(id, { objective: 'New objective', runs: 0, pendingContinuation: false, consecutiveErrors: 0 });
+        return h.turns.get(id) ?? null;
+      };
+      await createDevinGoalSweeper(h.deps).sweepOnce();
+      expect(h.dispatched, action).toHaveLength(0);
+    }
+  });
+
+  it('re-checks before a strike-retry or an unmet-turn continuation too: a pause during verification wins', async () => {
+    const h = await harness({ err: record({ maxRuns: 40 }), unmet: record({ maxRuns: 40 }) });
+    h.turns.set('err', { completedAt: 500, response: 'boom', status: 'error', error: 'boom' });
+    h.turns.set('unmet', { completedAt: 500, response: 'still working' });
+    const read = h.deps.readLastCompletedTurn;
+    h.deps.readLastCompletedTurn = async (id) => {
+      const turn = await read(id);
+      await h.store.patch(id, { status: 'paused', pausedReason: 'user', autoContinue: false });
+      return turn;
+    };
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+    expect(h.dispatched).toHaveLength(0);
+  });
+
+  it('a turn that completes between the snapshot and the dispatch wins: no stale continuation now, one for the newer turn next sweep (review r3)', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+    let reads = 0;
+    h.deps.readLastCompletedTurn = async () => {
+      reads += 1;
+      return reads === 1 ? { completedAt: 300, response: 'x' } : { completedAt: 400, response: 'still working' };
+    };
+    const sweeper = createDevinGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(0);
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(1);
+    expect(await h.store.get('s1')).toMatchObject({ lastVerifiedTurnAt: 400, runs: 1 });
+  });
+
+  it('an unmet-turn continuation refused at dispatch stays owed and is retried (review r3)', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: 'still working' });
+    let refuse = true;
+    h.deps.dispatch = async (id, message) => {
+      if (refuse) throw new Error('goal continuation dispatch failed (409)');
+      h.dispatched.push({ sessionId: id, message });
+    };
+    const sweeper = createDevinGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+    expect(await h.store.get('s1')).toMatchObject({ runs: 1, lastVerifiedTurnAt: 500, pendingContinuation: true });
+    expect(h.dispatched).toHaveLength(0);
+    refuse = false;
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(1);
+    expect((await h.store.get('s1'))?.pendingContinuation).toBeFalsy();
+    expect((await h.store.get('s1'))?.runs).toBe(1);
+  });
+
+  it('a pause or clear that lands during the guard\'s own latest-turn read still wins (review r4)', async () => {
+    for (const action of ['pause', 'clear'] as const) {
+      const h = await harness({ s1: record({ maxRuns: 40, lastVerifiedTurnAt: 300, pendingContinuation: true }) });
+      let reads = 0;
+      h.deps.readLastCompletedTurn = async (id) => {
+        reads += 1;
+        if (reads === 2) {
+          if (action === 'pause') await h.store.patch(id, { status: 'paused', pausedReason: 'user', autoContinue: false });
+          else await h.store.patch(id, { status: 'cleared', autoContinue: false, clearedAt: 1 });
+        }
+        return { completedAt: 300, response: 'x' };
+      };
+      await createDevinGoalSweeper(h.deps).sweepOnce();
+      expect(h.dispatched, action).toHaveLength(0);
+    }
+  });
+
+  it('does not dispatch a pending continuation for a paused goal or a busy session', async () => {
+    const h = await harness({
+      paused: record({ status: 'paused', pausedReason: 'user', autoContinue: false, lastVerifiedTurnAt: 300, pendingContinuation: true }),
+      busy: record({ lastVerifiedTurnAt: 300, pendingContinuation: true }),
+    });
+    h.turns.set('paused', { completedAt: 300, response: 'x' });
+    h.turns.set('busy', { completedAt: 300, response: 'x' });
+    h.running.add('busy');
+    await createDevinGoalSweeper(h.deps).sweepOnce();
+    expect(h.dispatched).toHaveLength(0);
+  });
+});
+
+describe('loadDevinGoalAutoContinueConfig', () => {
+  it('defaults are sane and env overrides apply', () => {
+    const defaults = loadDevinGoalAutoContinueConfig({});
+    expect(defaults).toEqual({ enabled: true, sweepIntervalMs: 15_000, maxRuns: 100, verifyTimeoutMs: 60_000 });
+
+    const overridden = loadDevinGoalAutoContinueConfig({
+      DEVIN_GOAL_AUTO_CONTINUE: 'false',
+      DEVIN_GOAL_SWEEP_MS: '5000',
+      DEVIN_GOAL_MAX_RUNS: '7',
+      DEVIN_GOAL_VERIFY_TIMEOUT_MS: '1234',
+    });
+    expect(overridden).toEqual({ enabled: false, sweepIntervalMs: 5000, maxRuns: 7, verifyTimeoutMs: 1234 });
+  });
+});
+
+// sanity: store writes stay private-ish (0700 dir semantics live with the session dir owner)
+describe('DevinGoalControlStore persistence', () => {
+  it('keeps records as plain JSON on disk', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'devin-goal2-'));
+    const store = new DevinGoalControlStore(dir);
+    await store.patch('x', { objective: 'o', status: 'cleared', runs: 0, maxRuns: 1, createdAt: 1, updatedAt: 2, autoContinue: false, clearedAt: 9 });
+    const raw = JSON.parse(await writeFile_await(dir));
+    expect(raw.status).toBe('cleared');
+  });
+
+  async function writeFile_await(dir: string): Promise<string> {
+    return readFile(path.join(dir, 'x.json'), 'utf8');
+  }
+});

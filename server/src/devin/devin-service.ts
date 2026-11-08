@@ -72,6 +72,18 @@ interface QueuedTurn {
   onComplete: (err?: Error) => void;
 }
 
+/** Latest finalized turn of a session, in the shape the devin goal sweeper
+ *  consumes (contract 1.68.0; antigravity shape). `status: 'error'` marks a
+ *  turn that ended in a provider/runtime error with no assistant answer — the
+ *  goal manager counts it as an error strike, never as an unmet turn. */
+export interface DevinCompletedTurn {
+  completedAt: number;
+  response: string;
+  status: 'done' | 'error';
+  /** The error the runtime recorded (present when status === 'error'). */
+  error?: string;
+}
+
 export interface DevinServiceOptions {
   registryPath: string;
   sessionDir?: string;
@@ -801,14 +813,14 @@ export class DevinService {
   }
 
   /** Last finalized turn summary (goal-manager parity, antigravity shape). */
-  async getLastCompletedTurn(sessionId: string): Promise<{ completedAt: number; response: string; status: 'done' | 'error'; error?: string } | null> {
+  async getLastCompletedTurn(sessionId: string): Promise<DevinCompletedTurn | null> {
     const history = await this.store.loadHistory(sessionId);
     const finalized = history.filter((t) => t.status !== 'running');
     const last = finalized[finalized.length - 1];
     if (!last) return null;
     const derived = last.turnDurationMs !== undefined ? last.timestamp + last.turnDurationMs : last.timestamp;
-    const summary = { completedAt: derived, response: last.response ?? '', status: (last.status === 'error' ? 'error' : 'done') as 'done' | 'error' };
-    if (last.error !== undefined) (summary as { error?: string }).error = last.error;
+    const summary: DevinCompletedTurn = { completedAt: derived, response: last.response ?? '', status: last.status === 'error' ? 'error' : 'done' };
+    if (last.error !== undefined) summary.error = last.error;
     return summary;
   }
 
