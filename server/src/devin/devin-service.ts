@@ -644,10 +644,10 @@ export class DevinService {
   }
 
   /** The model id actually applied for this session's next run (contract
-n  * 1.68.0 receipt truth). The registry stores a model only after a successful
-n  * `session/set_config_option` (closure N1), so the registry binding — or the
-n  * configured default when the session has none — is exactly what the child
-n  * is served on. */
+   * 1.68.0 receipt truth). The registry stores a model only after a successful
+   * `session/set_config_option` (closure N1), so the registry binding — or the
+   * configured default when the session has none — is exactly what the child
+   * is served on. */
   async getServedModel(sessionId: string): Promise<string | undefined> {
     const entry = await this.registry.get(sessionId).catch(() => null);
     if (!entry || entry.sdkType !== 'devin') return undefined;
