@@ -56,6 +56,8 @@ import { parseAgyGoalCommand, type AgyGoalCommand } from '../internal-api/goal/a
 import { OpenCodeSessionSubscribers } from '../opencode/opencode-session-subscribers.js';
 import { getAntigravityService, type AntigravityService } from '../antigravity/index.js';
 import { AntigravitySessionSubscribers } from '../antigravity/antigravity-session-subscribers.js';
+import { getDevinService, type DevinService } from '../devin/index.js';
+import { DevinSessionSubscribers } from '../devin/devin-session-subscribers.js';
 import { CommandCodeService } from '../command-code/command-code-service.js';
 import { setCommandCodeService } from '../command-code/command-code-instance.js';
 import { getSessionRegistry } from '../session-registry.js';
@@ -252,6 +254,7 @@ function isCoalescableSessionEvent(message: unknown): boolean {
 type ClaudeAvailabilityService = Pick<ClaudeService, 'isAvailable' | 'validateAuth'>;
 type OpenCodeAvailabilityService = Pick<OpenCodeService, 'isAvailable' | 'validateSetup'>;
 type AntigravityAvailabilityService = Pick<AntigravityService, 'isAvailable' | 'validateSetup'>;
+type DevinAvailabilityService = Pick<DevinService, 'isAvailable' | 'validateSetup'>;
 
 export async function sendRuntimeAvailabilityStatus(
   clientId: string,
@@ -260,6 +263,7 @@ export async function sendRuntimeAvailabilityStatus(
   sendMessage: (clientId: string, message: ServerMessage) => void,
   antigravityService?: AntigravityAvailabilityService,
   commandCodeService?: Pick<CommandCodeService, 'isEnabled' | 'isAvailable' | 'getModels'> & { init?: () => Promise<void> },
+  devinService?: DevinAvailabilityService,
 ): Promise<void> {
   await Promise.all([
     (async () => {
@@ -354,6 +358,36 @@ export async function sendRuntimeAvailabilityStatus(
       } catch {
         const enabled = commandCodeService.isEnabled();
         sendMessage(clientId, { type: 'commandcode_available', available: false, enabled, models: [], error: 'Command Code availability check failed' });
+      }
+    })(),
+    (async () => {
+      if (!devinService) return;
+      try {
+        const enabled = config.devinEnabled;
+        const available = enabled && await devinService.isAvailable();
+        if (available) {
+          const setup = await devinService.validateSetup();
+          sendMessage(clientId, {
+            type: 'devin_available',
+            available: setup.ok,
+            enabled,
+            error: setup.ok ? null : (setup.error ?? null),
+          } as ServerMessage);
+        } else {
+          sendMessage(clientId, {
+            type: 'devin_available',
+            available: false,
+            enabled,
+            error: enabled ? 'devin CLI not installed' : 'Devin runtime is disabled',
+          } as ServerMessage);
+        }
+      } catch {
+        sendMessage(clientId, {
+          type: 'devin_available',
+          available: false,
+          enabled: config.devinEnabled,
+          error: 'Devin availability check failed',
+        } as ServerMessage);
       }
     })(),
   ]);
@@ -470,6 +504,9 @@ export class WebSocketConnectionManager {
   private antigravityService: AntigravityService;
   private antigravitySessionIds: Set<string> = new Set();
   private antigravitySubs = new AntigravitySessionSubscribers();
+  private devinService: DevinService;
+  private devinSessionIds: Set<string> = new Set();
+  private devinSubs = new DevinSessionSubscribers();
   private commandCodeService: CommandCodeService;
   private commandCodeSessionIds: Set<string> = new Set();
   private commandCodeSubs = new Map<string, Set<string>>();
@@ -495,6 +532,7 @@ export class WebSocketConnectionManager {
     this.claudeService = getClaudeService();
     this.opencodeService = getOpenCodeService();
     this.antigravityService = getAntigravityService();
+    this.devinService = getDevinService();
     this.commandCodeService = commandCodeService ?? new CommandCodeService({
       config: {
         enabled: config.commandCodeEnabled,
@@ -524,6 +562,7 @@ export class WebSocketConnectionManager {
     void this.restoreClaudeSessionIds();
     void this.restoreOpencodeSessionIds();
     void this.restoreAntigravitySessionIds();
+    void this.restoreDevinSessionIds();
     void this.restoreCommandCodeSessionIds();
 
     // Create MultiSessionManager with broadcast function
@@ -640,6 +679,21 @@ export class WebSocketConnectionManager {
       }
     } catch (err) {
       logger.warn('[WebUI] Failed to restore Antigravity session IDs from registry:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async restoreDevinSessionIds(): Promise<void> {
+    try {
+      const registry = getSessionRegistry();
+      const sessions = await registry.listBySdkType('devin');
+      for (const entry of sessions) {
+        this.devinSessionIds.add(entry.id);
+      }
+      if (sessions.length > 0) {
+        logger.info(`[WebUI] Restored ${sessions.length} Devin session ID(s) from registry`);
+      }
+    } catch (err) {
+      logger.warn('[WebUI] Failed to restore Devin session IDs from registry:', err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -766,6 +820,22 @@ export class WebSocketConnectionManager {
         }
       }
 
+      for (const sessionId of this.devinSessionIds) {
+        const subscribers = this.devinSubs.getSubscribers(sessionId);
+        if (subscribers.size > 0) {
+          const isRunning = this.devinService.isRunning(sessionId);
+          const isPinned = this.devinService.isSessionPinned(sessionId);
+          this.broadcast({
+            type: 'session_status',
+            sessionId,
+            sessionPath: sessionId,
+            status: isRunning ? 'streaming' : 'idle',
+            lastActivity: new Date().toISOString(),
+            pinned: isPinned,
+          });
+        }
+      }
+
       for (const sessionId of this.commandCodeSessionIds) {
         const subscribers = this.getCommandCodeSubscribers(sessionId);
         if (subscribers.size > 0) {
@@ -820,6 +890,7 @@ export class WebSocketConnectionManager {
         this.sendMessage.bind(this),
         this.antigravityService,
         this.commandCodeService,
+        this.devinService,
       );
 
       // Set up event forwarding for this client
@@ -1452,6 +1523,11 @@ export class WebSocketConnectionManager {
         return;
       }
 
+      if (this.devinSessionIds.has(sessionPath)) {
+        await this.handleDevinPrompt(clientId, sessionPath, message.message);
+        return;
+      }
+
       if (this.opencodeSessionIds.has(sessionPath)) {
         await this.handleOpencodePrompt(clientId, sessionPath, message.message, message.images, message.agent);
         return;
@@ -1912,6 +1988,49 @@ export class WebSocketConnectionManager {
     }
   }
 
+  /** Shared devin event fan-out (prompt + follow-up use identical routing). */
+  private devinEventSink(clientId: string, sessionId: string): (normalizedEvent: NormalizedEvent) => void {
+    return (normalizedEvent) => {
+      const piEvent = normEventToPiFormat(normalizedEvent);
+      const msg = { type: 'session_event' as const, sessionId, event: piEvent };
+      const subscribers = this.devinSubs.getSubscribers(sessionId);
+      const targets = subscribers.size > 0 ? [...subscribers] : [clientId];
+      for (const subId of targets) {
+        this.sendMessage(subId, msg);
+      }
+    };
+  }
+
+  private async handleDevinPrompt(
+    clientId: string,
+    sessionId: string,
+    prompt: string,
+  ): Promise<void> {
+    try {
+      await this.devinService.sendPrompt(
+        sessionId,
+        prompt,
+        this.devinEventSink(clientId, sessionId),
+        (error) => {
+          const subscribers = this.devinSubs.getSubscribers(sessionId);
+          const targets = [...subscribers].length > 0 ? [...subscribers] : [clientId];
+          if (error) {
+            for (const subId of targets) {
+              this.sendMessage(subId, { type: 'error', message: error.message, code: 'DEVIN_ERROR' });
+            }
+          }
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Devin prompt failed';
+      this.sendMessage(clientId, {
+        type: 'error',
+        message,
+        code: message.includes('SESSION_BUSY') ? 'SESSION_BUSY' : 'DEVIN_ERROR',
+      });
+    }
+  }
+
   private async handleSteer(clientId: string, message: { type: 'steer'; message: string }): Promise<void> {
     if (this.blockIfPromptInjection(clientId, message.message)) {
       return;
@@ -1950,6 +2069,17 @@ export class WebSocketConnectionManager {
       this.sendMessage(clientId, {
         type: 'error',
         message: 'Antigravity has no mid-run steering. Your message would arrive only after the current turn; send it as a follow-up (queue) instead.',
+        code: 'STEER_NOT_RUNNING',
+      });
+      return;
+    }
+
+    // Devin: no mid-run join either — steer is refused honestly; follow_up
+    // queues FIFO and runs as the next turn (brief design point 7).
+    if (this.devinSessionIds.has(sessionPath)) {
+      this.sendMessage(clientId, {
+        type: 'error',
+        message: 'Devin has no mid-run steering. Your message would arrive only after the current turn; send it as a follow-up (queue) instead.',
         code: 'STEER_NOT_RUNNING',
       });
       return;
@@ -2019,6 +2149,32 @@ export class WebSocketConnectionManager {
           if (error) {
             for (const subId of targets) {
               this.sendMessage(subId, { type: 'error', message: error.message, code: 'ANTIGRAVITY_ERROR' });
+            }
+          }
+        },
+      );
+      if (!queued) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: 'Session is not running a turn to follow. Send the message as a normal prompt instead.',
+          code: 'STEER_NOT_RUNNING',
+        });
+      }
+      return;
+    }
+
+    // Devin: server-side FIFO queue drained when the current turn ends.
+    if (this.devinSessionIds.has(sessionPath)) {
+      const queued = await this.devinService.followUp(
+        sessionPath,
+        message.message,
+        this.devinEventSink(clientId, sessionPath),
+        (error) => {
+          const subscribers = this.devinSubs.getSubscribers(sessionPath);
+          const targets = [...subscribers].length > 0 ? [...subscribers] : [clientId];
+          if (error) {
+            for (const subId of targets) {
+              this.sendMessage(subId, { type: 'error', message: error.message, code: 'DEVIN_ERROR' });
             }
           }
         },
@@ -2120,6 +2276,13 @@ export class WebSocketConnectionManager {
           event: { type: 'agent_end', result: null, usage: {} },
         } as unknown as ServerMessage);
       }
+      return;
+    }
+
+    // Devin: session/cancel — the pending prompt resolves cancelled and the
+    // turn finalizes (adapter always emits agent_end; no synthetic one here).
+    if (this.devinSessionIds.has(sessionPath)) {
+      this.devinService.abort(sessionPath);
       return;
     }
 
@@ -2389,6 +2552,45 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    if (sdkType === 'devin') {
+      // Fail-closed like the other gated runtimes: a disabled Devin answers
+      // honestly instead of surfacing a generic create failure.
+      if (!config.devinEnabled) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: 'Devin runtime is disabled',
+          code: 'SESSION_CREATE_FAILED',
+          ...(message.requestId ? { requestId: message.requestId } : {}),
+        });
+        return;
+      }
+      try {
+        const { sessionId } = await this.devinService.createSession(cwd, message.model);
+        await this.tagBrowserSessionOrigin(sessionId, 'devin', sessionId, cwd);
+        this.devinSessionIds.add(sessionId);
+        this.clientViewingSession.set(clientId, sessionId);
+        this.devinSubs.subscribe(clientId, sessionId);
+        this.clientCwd.set(clientId, cwd);
+
+        this.sendMessage(clientId, {
+          type: 'session_created',
+          sessionId,
+          sessionPath: sessionId,
+          sdkType: 'devin',
+          ...(message.model ? { model: message.model } : {}),
+          ...(message.requestId ? { requestId: message.requestId } : {}),
+        } as unknown as ServerMessage);
+      } catch (error) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Failed to create Devin session',
+          code: 'SESSION_CREATE_FAILED',
+          ...(message.requestId ? { requestId: message.requestId } : {}),
+        });
+      }
+      return;
+    }
+
     if (sdkType === 'opencode') {
       // Fail-closed with the contracted stable error before createSession (which
       // would otherwise throw a generic 'OpenCode integration is disabled' from
@@ -2599,6 +2801,7 @@ export class WebSocketConnectionManager {
         this.opencodeSubs.unsubscribe(clientId, oldSessionPath);
         this.claudeSubs.unsubscribe(clientId, oldSessionPath);
         this.unsubscribeCommandCode(clientId, oldSessionPath);
+        this.devinSubs.unsubscribe(clientId, oldSessionPath);
         this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
       }
       this.clientViewingSession.set(clientId, sessionPath);
@@ -2606,6 +2809,38 @@ export class WebSocketConnectionManager {
       await this.antigravityService.touchSession(sessionPath);
       await this.replayAntigravityHistory(clientId, sessionPath);
       logger.info(`[handleSwitchSession] Client ${clientId} switched to Antigravity session ${sessionPath}`);
+      return;
+    }
+
+    // Devin: same hint-then-registry pattern; replay from the turn store.
+    let isDevinSession = this.devinSessionIds.has(sessionPath);
+    if (!isDevinSession) {
+      try {
+        const registry = getSessionRegistry();
+        const entry = await registry.get(sessionPath);
+        if (entry?.sdkType === 'devin') {
+          isDevinSession = true;
+          this.devinSessionIds.add(sessionPath);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (isDevinSession) {
+      if (oldSessionPath && oldSessionPath !== sessionPath) {
+        this.devinSubs.unsubscribe(clientId, oldSessionPath);
+        this.opencodeSubs.unsubscribe(clientId, oldSessionPath);
+        this.claudeSubs.unsubscribe(clientId, oldSessionPath);
+        this.unsubscribeCommandCode(clientId, oldSessionPath);
+        this.antigravitySubs.unsubscribe(clientId, oldSessionPath);
+        this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
+      }
+      this.clientViewingSession.set(clientId, sessionPath);
+      this.devinSubs.subscribe(clientId, sessionPath);
+      await this.devinService.touchSession(sessionPath);
+      await this.replayDevinHistory(clientId, sessionPath);
+      logger.info(`[handleSwitchSession] Client ${clientId} switched to Devin session ${sessionPath}`);
       return;
     }
 
@@ -2626,6 +2861,7 @@ export class WebSocketConnectionManager {
         this.opencodeSubs.unsubscribe(clientId, oldSessionPath);
         this.antigravitySubs.unsubscribe(clientId, oldSessionPath);
         this.claudeSubs.unsubscribe(clientId, oldSessionPath);
+        this.devinSubs.unsubscribe(clientId, oldSessionPath);
         this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
       }
       this.clientViewingSession.set(clientId, sessionPath);
@@ -2651,6 +2887,7 @@ export class WebSocketConnectionManager {
       this.claudeSubs.unsubscribe(clientId, oldSessionPath);
       this.opencodeSubs.unsubscribe(clientId, oldSessionPath);
       this.antigravitySubs.unsubscribe(clientId, oldSessionPath);
+      this.devinSubs.unsubscribe(clientId, oldSessionPath);
       this.multiSessionManager.unsubscribeClient(clientId, oldSessionPath);
       logger.info(`[handleSwitchSession] Client ${clientId} unsubscribed from ${oldSessionPath}`);
     }
@@ -2801,6 +3038,7 @@ export class WebSocketConnectionManager {
     return this.claudeSessionIds.has(sessionPath)
       || this.opencodeSessionIds.has(sessionPath)
       || this.antigravitySessionIds.has(sessionPath)
+      || this.devinSessionIds.has(sessionPath)
       || this.commandCodeSessionIds.has(sessionPath);
   }
 
@@ -3160,6 +3398,37 @@ export class WebSocketConnectionManager {
     }
   }
 
+  private async replayDevinHistory(clientId: string, sessionId: string): Promise<void> {
+    const registry = getSessionRegistry();
+    const entry = await registry.get(sessionId);
+    if (!entry) {
+      this.sendMessage(clientId, { type: 'error', message: 'Devin session not found', code: 'SESSION_NOT_FOUND' } as unknown as ServerMessage);
+      return;
+    }
+    this.sendMessage(clientId, {
+      type: 'session_switched',
+      sessionId,
+      sessionPath: sessionId,
+      sdkType: 'devin',
+      model: entry.model ?? config.devinDefaultModel,
+      messages: [],
+      fileTimestamp: 0,
+      isStreaming: this.devinService.isRunning(sessionId),
+    } as unknown as ServerMessage);
+    try {
+      const events = await this.devinService.getReplayEvents(sessionId);
+      if (events.length > 0) {
+        this.sendMessage(clientId, { type: 'history_start', sessionId } as unknown as ServerMessage);
+        for (const evt of events) {
+          this.sendMessage(clientId, { type: 'session_event', sessionId, event: evt } as unknown as ServerMessage);
+        }
+        this.sendMessage(clientId, { type: 'history_end', sessionId } as unknown as ServerMessage);
+      }
+    } catch (error) {
+      logger.error('[replayDevinHistory] Error:', error);
+    }
+  }
+
   /**
    * Load messages from a session file (JSONL format)
    * Returns messages and file modification timestamp for cache invalidation
@@ -3483,6 +3752,36 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    // Devin session info
+    if (this.devinSessionIds.has(sessionPath)) {
+      try {
+        const dvStats = await this.devinService.getSessionStats(sessionPath);
+        if (!dvStats) {
+          this.sendMessage(clientId, { type: 'error', message: 'Devin session not found', code: 'SESSION_NOT_FOUND' });
+          return;
+        }
+        this.sendMessage(clientId, {
+          type: 'session_info',
+          stats: {
+            sessionFile: dvStats.sessionFile,
+            sessionId: dvStats.sessionId,
+            nativeSessionId: dvStats.nativeSessionId,
+            cwd: dvStats.cwd,
+            userMessages: dvStats.userMessages,
+            assistantMessages: dvStats.assistantMessages,
+            toolCalls: dvStats.toolCalls,
+            toolResults: dvStats.toolResults,
+            totalMessages: dvStats.totalMessages,
+            tokens: dvStats.tokens,
+            model: dvStats.model,
+          },
+        });
+      } catch (error) {
+        this.sendMessage(clientId, { type: 'error', message: error instanceof Error ? error.message : 'Failed to get Devin session info', code: 'INTERNAL_ERROR' });
+      }
+      return;
+    }
+
     // Pi SDK session info (original path)
     const agentSession = await this.ensurePiAgentSession(clientId, sessionPath);
     if (!agentSession) {
@@ -3551,6 +3850,21 @@ export class WebSocketConnectionManager {
     if (this.antigravitySessionIds.has(sessionPath)) {
       try {
         const normalizedModel = await this.antigravityService.setModel(sessionPath, message.modelId);
+        this.sendMessage(clientId, { type: 'model_changed', modelId: normalizedModel });
+      } catch (error) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Failed to change model',
+          code: 'MODEL_CHANGE_FAILED',
+        });
+      }
+      return;
+    }
+
+    // Handle Devin session model change (ruling 01: every catalogue model).
+    if (this.devinSessionIds.has(sessionPath)) {
+      try {
+        const normalizedModel = await this.devinService.setModel(sessionPath, message.modelId);
         this.sendMessage(clientId, { type: 'model_changed', modelId: normalizedModel });
       } catch (error) {
         this.sendMessage(clientId, {
@@ -3690,6 +4004,25 @@ export class WebSocketConnectionManager {
 
     if (this.commandCodeSessionIds.has(sessionPath)) {
       this.sendMessage(clientId, { type: 'error', message: 'Command Code uses native effort, not generic thinkingLevel', code: 'THINKING_LEVEL_UNSUPPORTED' });
+      return;
+    }
+
+    // Devin: thinking level = sibling-model swap (plan D4); busy refuses with
+    // SESSION_BUSY surfaced through THINKING_LEVEL_ERROR.
+    if (this.devinSessionIds.has(sessionPath)) {
+      try {
+        await this.devinService.setThinkingLevel(sessionPath, message.level);
+        this.sendMessage(clientId, {
+          type: 'thinking_level_changed',
+          level: message.level,
+        });
+      } catch (err) {
+        this.sendMessage(clientId, {
+          type: 'error',
+          message: err instanceof Error ? err.message : 'Failed to set thinking level',
+          code: 'THINKING_LEVEL_ERROR',
+        });
+      }
       return;
     }
 
@@ -4024,6 +4357,26 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    // Devin session subscribe (hint then registry).
+    let isDevinSub = this.devinSessionIds.has(sessionPath);
+    if (!isDevinSub) {
+      try {
+        const registry = getSessionRegistry();
+        const entry = await registry.get(sessionPath).catch(() => undefined);
+        if (entry?.sdkType === 'devin') {
+          isDevinSub = true;
+          this.devinSessionIds.add(sessionPath);
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (isDevinSub) {
+      this.clientViewingSession.set(clientId, sessionPath);
+      this.devinSubs.subscribe(clientId, sessionPath);
+      await this.replayDevinHistory(clientId, sessionPath);
+      return;
+    }
+
     try {
       const status = await this.multiSessionManager.subscribeClient(clientId, sessionPath, undefined, this.getWebUIContext(clientId));
 
@@ -4076,9 +4429,10 @@ export class WebSocketConnectionManager {
     });
   }
 
-  private async resolveSessionRuntime(sessionPath: string): Promise<'commandcode' | 'antigravity' | 'opencode' | 'claude' | 'pi'> {
+  private async resolveSessionRuntime(sessionPath: string): Promise<'commandcode' | 'antigravity' | 'devin' | 'opencode' | 'claude' | 'pi'> {
     if (this.commandCodeSessionIds.has(sessionPath)) return 'commandcode';
     if (this.antigravitySessionIds.has(sessionPath)) return 'antigravity';
+    if (this.devinSessionIds.has(sessionPath)) return 'devin';
     if (this.opencodeSessionIds.has(sessionPath)) return 'opencode';
     if (this.claudeSessionIds.has(sessionPath)) return 'claude';
     try {
@@ -4090,6 +4444,10 @@ export class WebSocketConnectionManager {
       if (entry?.sdkType === 'antigravity') {
         this.antigravitySessionIds.add(sessionPath);
         return 'antigravity';
+      }
+      if (entry?.sdkType === 'devin') {
+        this.devinSessionIds.add(sessionPath);
+        return 'devin';
       }
       if (entry?.sdkType === 'opencode') {
         this.opencodeSessionIds.add(sessionPath);
@@ -4125,6 +4483,21 @@ export class WebSocketConnectionManager {
         this.sendMessage(clientId, { type: 'session_pinned', sessionPath: message.sessionPath, pinned: true });
       } else {
         const hasSession = this.antigravityService.hasSession(message.sessionPath);
+        this.sendMessage(clientId, {
+          type: 'session_pin_error',
+          sessionPath: message.sessionPath,
+          error: hasSession ? 'Maximum pinned sessions limit reached' : 'Session not found',
+        });
+      }
+      return;
+    }
+
+    if (runtime === 'devin') {
+      const success = await this.devinService.pinSession(message.sessionPath);
+      if (success) {
+        this.sendMessage(clientId, { type: 'session_pinned', sessionPath: message.sessionPath, pinned: true });
+      } else {
+        const hasSession = this.devinService.hasSession(message.sessionPath);
         this.sendMessage(clientId, {
           type: 'session_pin_error',
           sessionPath: message.sessionPath,
@@ -4207,6 +4580,12 @@ export class WebSocketConnectionManager {
       return;
     }
 
+    if (runtime === 'devin') {
+      this.devinService.unpinSession(message.sessionPath);
+      this.sendMessage(clientId, { type: 'session_pinned', sessionPath: message.sessionPath, pinned: false });
+      return;
+    }
+
     if (runtime === 'opencode') {
       this.opencodeService.unpinSession(message.sessionPath);
       this.sendMessage(clientId, {
@@ -4256,6 +4635,7 @@ export class WebSocketConnectionManager {
       this.claudeSubs.unsubscribeAll(clientId);
       this.opencodeSubs.unsubscribeAll(clientId);
       this.antigravitySubs.unsubscribeAll(clientId);
+      this.devinSubs.unsubscribeAll(clientId);
       this.unsubscribeAllCommandCode(clientId);
 
       // Arm the grace timer for sessions that may now be unwatched + pending.

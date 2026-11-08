@@ -213,6 +213,7 @@ export type ServerMessage =
   | { type: 'model_changed'; modelId: string }
   | { type: 'effort_changed'; effort?: CommandCodeEffort; effortLevels?: CommandCodeEffort[]; defaultEffort?: CommandCodeEffort }
   | { type: 'commandcode_available'; available: boolean; enabled: boolean; models: CommandCodeModelInfo[]; error: string | null }
+  | { type: 'devin_available'; available: boolean; enabled: boolean; error: string | null }
   | { type: 'thinking_level_changed'; level: string }
   | { type: 'compaction_result'; summary: string; tokensBefore: number; contextWindow?: number; contextUsed?: number; contextPercent?: number }
   | { type: 'context_update'; sessionId: string; contextWindow?: number; contextUsed?: number; contextPercent?: number }
