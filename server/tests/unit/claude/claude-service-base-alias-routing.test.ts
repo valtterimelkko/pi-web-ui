@@ -31,6 +31,8 @@ describe('ClaudeService base-alias routing', () => {
           model: 'sonnet', skills: 'all' },
         { id: 'claude-opus-sdk', label: 'Claude Opus SDK', backend: 'sdk-subscription', launcherType: 'native-env',
           model: 'opus', skills: 'all' },
+        { id: 'claude-fable-sdk', label: 'Claude Fable SDK', backend: 'sdk-subscription', launcherType: 'native-env',
+          model: 'fable', skills: 'all' },
         { id: 'claude-channel', label: 'Claude Channel', backend: 'channel', launcherType: 'native-env',
           model: 'sonnet', skills: 'all' },
       ],
@@ -65,6 +67,19 @@ describe('ClaudeService base-alias routing', () => {
   it('routes bare "opus" to the native Claude opus profile', async () => {
     const { sessionId } = await svc().createSession(tmpDir, 'opus');
     expect(profileOf(sessionId)).toBe('claude-opus-sdk');
+  });
+
+  it('routes bare "fable" to the native Claude fable profile, not the GLM default', async () => {
+    const { sessionId } = await svc().createSession(tmpDir, 'fable');
+    expect(profileOf(sessionId)).toBe('claude-fable-sdk');
+  });
+
+  it('keeps fable as its own alias when the model is switched (never collapses to sonnet)', async () => {
+    const service = svc();
+    const { sessionId } = await service.createSession(tmpDir, 'sonnet');
+    expect(await service.setModel(sessionId, 'fable')).toBe('fable');
+    expect(await service.setModel(sessionId, 'claude-fable-5-2')).toBe('fable');
+    expect(entryOf(sessionId)).toMatchObject({ model: 'fable' });
   });
 
   it('honors an explicit GLM profileId', async () => {

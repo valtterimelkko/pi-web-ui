@@ -84,6 +84,7 @@ router.get('/', async (req: Request, res: Response) => {
         { id: 'sonnet', displayName: 'Claude Sonnet', provider: 'anthropic', thinkingLevels: claudeThinkingLevels('sonnet', 'anthropic') },
         { id: 'opus', displayName: 'Claude Opus', provider: 'anthropic', thinkingLevels: claudeThinkingLevels('opus', 'anthropic') },
         { id: 'haiku', displayName: 'Claude Haiku', provider: 'anthropic', thinkingLevels: claudeThinkingLevels('haiku', 'anthropic') },
+        { id: 'fable', displayName: 'Claude Fable', provider: 'anthropic', thinkingLevels: claudeThinkingLevels('fable', 'anthropic') },
       ];
 
       // When provider profiles are enabled, surface each enabled profile as a

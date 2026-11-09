@@ -44,7 +44,7 @@ function normalizeLevels(values: readonly string[]): readonly ThinkingLevel[] {
 
 function supportsMaxByAlias(model?: string | null): boolean {
   const normalized = (model ?? '').toLowerCase();
-  return normalized.includes('sonnet') || normalized.includes('opus');
+  return normalized.includes('sonnet') || normalized.includes('opus') || normalized.includes('fable');
 }
 
 /**

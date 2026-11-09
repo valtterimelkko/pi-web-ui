@@ -189,13 +189,13 @@ describe('createModelsRoutes — handleListModels', () => {
     });
   });
 
-  it('labels the Claude sonnet, opus and haiku aliases with the 5.5 models they launch', async () => {
+  it('labels the Claude sonnet, opus, haiku and fable aliases with the models they launch', async () => {
     const profile = (model: string) => ({ id: `native-${model}`, label: model, model, backend: 'sdk-subscription' });
     const routes = createModelsRoutes({
       piService: { getAvailableModels: vi.fn().mockResolvedValue([]) } as any,
       claudeService: {
         isAvailable: vi.fn().mockResolvedValue(true),
-        getProfiles: vi.fn().mockReturnValue([profile('sonnet'), profile('opus'), profile('haiku')]),
+        getProfiles: vi.fn().mockReturnValue([profile('sonnet'), profile('opus'), profile('haiku'), profile('fable')]),
       } as any,
       opencodeService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
       antigravityService: { isAvailable: vi.fn().mockResolvedValue(false) } as any,
@@ -205,9 +205,17 @@ describe('createModelsRoutes — handleListModels', () => {
     await routes.handleListModels(createMockReq(undefined, 'GET', '/api/v1/models?runtime=claude'), res);
 
     const names = Object.fromEntries(JSON.parse(res.body).models.claude
-      .filter((m: { id: string }) => ['sonnet', 'opus', 'haiku'].includes(m.id))
+      .filter((m: { id: string }) => ['sonnet', 'opus', 'haiku', 'fable'].includes(m.id))
       .map((m: { id: string; displayName: string }) => [m.id, m.displayName]));
-    expect(names).toEqual({ sonnet: 'Claude Sonnet 5.5', opus: 'Claude Opus 5.5', haiku: 'Claude Haiku 5.5' });
+    expect(names).toEqual({
+      sonnet: 'Claude Sonnet 5.5',
+      opus: 'Claude Opus 5.5',
+      haiku: 'Claude Haiku 5.5',
+      fable: 'Claude Fable 5.2',
+    });
+    const fable = JSON.parse(res.body).models.claude.find((m: { id: string }) => m.id === 'fable');
+    expect(fable).toMatchObject({ selector: 'fable', provider: 'anthropic' });
+    expect(fable.thinkingLevels).toContain('max');
   });
 
   it('publishes zai/glm-5.3-flash with only its catalogued low/high/max levels', async () => {

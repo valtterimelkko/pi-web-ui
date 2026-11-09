@@ -47,6 +47,7 @@ describe('GET /api/models?sdkType=claude', () => {
     expect(ids).toContain('sonnet');
     expect(ids).toContain('opus');
     expect(ids).toContain('haiku');
+    expect(ids).toContain('fable');
     expect(ids).toContain('profile:glm52-claude-sdk');
     expect(ids).toContain('profile:claude-opus-cli-direct');
 
@@ -75,6 +76,8 @@ describe('GET /api/models?sdkType=claude', () => {
     expect(byId.get('sonnet').thinkingLevels).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
     expect(byId.get('opus').thinkingLevels).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
     expect(byId.get('haiku').thinkingLevels).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+    // Fable supports max like Sonnet/Opus.
+    expect(byId.get('fable').thinkingLevels).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
     // Profile entries mirror the same model-aware levels.
     expect(byId.get('profile:claude-sonnet-sdk').thinkingLevels).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
@@ -87,7 +90,7 @@ describe('GET /api/models?sdkType=claude', () => {
     const res = await request(app).get('/api/models?sdkType=claude').expect(200);
     const ids = res.body.models.map((m: { id: string }) => m.id);
 
-    expect(ids).toEqual(['sonnet', 'opus', 'haiku']);
+    expect(ids).toEqual(['sonnet', 'opus', 'haiku', 'fable']);
     expect(ids.some((id: string) => id.startsWith('profile:'))).toBe(false);
   });
 });

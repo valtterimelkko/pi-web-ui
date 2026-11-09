@@ -89,7 +89,7 @@ export interface ClaudeSessionInfo {
   id: string;           // Our internal ID (UUID)
   claudeSessionId: string;  // Claude Code's session ID (--session-id flag)
   cwd: string;
-  model: string;        // 'opus' | 'sonnet' | 'haiku'
+  model: string;        // 'opus' | 'sonnet' | 'haiku' | 'fable'
   createdAt: Date;
   lastActivity: Date;
   messageCount: number;

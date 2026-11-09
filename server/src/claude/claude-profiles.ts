@@ -578,7 +578,8 @@ export function claudeThinkingLevels(model?: string, provider?: string): string[
   const normalizedModel = model?.toLowerCase() ?? '';
   const maxSupported = provider === 'zai'
     || normalizedModel.includes('sonnet')
-    || normalizedModel.includes('opus');
+    || normalizedModel.includes('opus')
+    || normalizedModel.includes('fable');
   return maxSupported ? [...CLAUDE_MAX_THINKING_LEVELS] : [...CLAUDE_LEGACY_THINKING_LEVELS];
 }
 

@@ -244,6 +244,7 @@ The IDs below are **illustrative examples**, not fixed built-ins. Your actual ID
 | Claude | SDK | sonnet/opus/haiku | `claude-sonnet-sdk-subscription`, `claude-opus-sdk-subscription`, `claude-haiku-sdk-subscription` |
 | Claude | CLI direct | sonnet/opus/haiku | `claude-{sonnet,opus,haiku}-cli-direct` |
 | Claude | Channel | sonnet/opus/haiku | `claude-{sonnet,opus,haiku}-channel` |
+| Claude | SDK (Fable) | fable (resolves to the CLI's newest Fable; 5.2 at time of writing) | `claude-fable-sdk-subscription` |
 | GLM | SDK | (single) | `glm53-claude-sdk-native-profile` |
 | GLM | CLI direct | (single) | `glm53-claude-cli-direct` |
 

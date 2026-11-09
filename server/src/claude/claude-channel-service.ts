@@ -77,6 +77,7 @@ const CLAUDE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   sonnet: 200_000,
   haiku: 200_000,
   opus: 200_000,
+  fable: 200_000,
 };
 
 interface SessionContextMeta {

@@ -47,8 +47,9 @@ export interface ClaudeAuthStatus {
 
 // ─── ClaudeService ────────────────────────────────────────────────────────────
 
-function normalizeClaudeModelAlias(model: string): 'opus' | 'sonnet' | 'haiku' {
+function normalizeClaudeModelAlias(model: string): 'opus' | 'sonnet' | 'haiku' | 'fable' {
   const lower = model.toLowerCase();
+  if (lower.includes('fable')) return 'fable';
   if (lower.includes('opus')) return 'opus';
   if (lower.includes('haiku')) return 'haiku';
   return 'sonnet';
@@ -281,7 +282,7 @@ export class ClaudeService {
     //
     // Resolution order:
     //   1. An explicit profileId always wins.
-    //   2. A bare Claude alias (sonnet/opus/haiku) resolves to a *native
+    //   2. A bare Claude alias (sonnet/opus/haiku/fable) resolves to a *native
     //      Claude* profile for that model — never the (possibly GLM) default
     //      profile. This prevents the footgun where picking "Claude Sonnet"
     //      silently ran GLM because a GLM default profile was configured.
@@ -289,7 +290,7 @@ export class ClaudeService {
     let profile: ClaudeProfile | undefined;
     let effectiveProfileId = profileId;
     if (!explicitProfileRequested && !effectiveProfileId && this.profileManager) {
-      const BARE_ALIASES = ['sonnet', 'opus', 'haiku'];
+      const BARE_ALIASES = ['sonnet', 'opus', 'haiku', 'fable'];
       if (BARE_ALIASES.includes(model)) {
         effectiveProfileId = this.findNativeClaudeProfileId(model);
       } else {
@@ -705,7 +706,7 @@ export class ClaudeService {
     return historyToReplayEvents(history);
   }
 
-  async setModel(sessionId: string, model: string): Promise<'opus' | 'sonnet' | 'haiku'> {
+  async setModel(sessionId: string, model: string): Promise<'opus' | 'sonnet' | 'haiku' | 'fable'> {
     if (this.hasChannelSession(sessionId)) {
       const result = await this.channelService!.setModel(sessionId, model);
       return normalizeClaudeModelAlias(result);

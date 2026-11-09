@@ -9,7 +9,9 @@ const CLAUDE_PROFILE_MODELS = [
   { id: 'sonnet', displayName: 'Claude Sonnet', provider: 'anthropic' },
   { id: 'opus', displayName: 'Claude Opus', provider: 'anthropic' },
   { id: 'haiku', displayName: 'Claude Haiku', provider: 'anthropic' },
+  { id: 'fable', displayName: 'Claude Fable 5.2', provider: 'anthropic' },
   { id: 'profile:claude-sonnet-sdk', displayName: 'Claude Sonnet', provider: 'anthropic', backend: 'sdk-subscription', claudeModel: 'sonnet' },
+  { id: 'profile:claude-fable-sdk', displayName: 'Claude Fable — SDK', provider: 'anthropic', backend: 'sdk-subscription', claudeModel: 'fable' },
   { id: 'profile:claude-opus-cli-direct', displayName: 'Claude Opus', provider: 'anthropic', backend: 'cli-direct', claudeModel: 'opus' },
   { id: 'profile:claude-sonnet-channel', displayName: 'Claude Sonnet', provider: 'anthropic', backend: 'channel', claudeModel: 'sonnet' },
   { id: 'profile:glm52-claude-sdk', displayName: 'GLM 5.3 via Claude SDK', provider: 'zai', backend: 'sdk-subscription', claudeModel: 'glm-5.3[1m]' },
@@ -122,6 +124,15 @@ describe('NewSessionModal — Claude backend selector', () => {
     expect(channel.className).toContain('cursor-not-allowed');
     expect(screen.getByTestId('claude-backend-channel-lock')).toBeInTheDocument();
     expect(screen.getByTestId('claude-backend-locked-note')).toBeInTheDocument();
+  });
+
+  it('offers Fable in the SDK model dropdown next to Sonnet', async () => {
+    await selectClaude();
+
+    const select = screen.getByTestId('claude-model-select') as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    expect(labels).toEqual(['Sonnet', 'Fable']);
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(['sonnet', 'fable']);
   });
 
   it('keeps SDK and CLI direct backends selectable', async () => {

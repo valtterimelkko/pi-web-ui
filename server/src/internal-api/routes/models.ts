@@ -107,6 +107,14 @@ export function createModelsRoutes(deps: ModelsRoutesDeps) {
               reasoning: true,
               thinkingLevels: claudeThinkingLevels('haiku', 'anthropic'),
             },
+            {
+              id: 'fable',
+              selector: 'fable',
+              displayName: 'Claude Fable 5.2',
+              provider: 'anthropic',
+              reasoning: true,
+              thinkingLevels: claudeThinkingLevels('fable', 'anthropic'),
+            },
           ];
           result.claude = aliasModels.filter((alias) =>
             sdkProfiles.some((profile) => !profile.baseUrl && profile.model === alias.id));

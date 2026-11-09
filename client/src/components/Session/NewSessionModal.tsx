@@ -34,11 +34,11 @@ const piModelLabel = (model: PiModelEntry) => {
 type ClaudeProvider = 'claude' | 'glm';
 
 interface ClaudeModelEntry {
-  id: string;            // 'sonnet' | 'opus' | 'haiku' | 'profile:<id>'
+  id: string;            // 'sonnet' | 'opus' | 'haiku' | 'fable' | 'profile:<id>'
   displayName: string;
   provider: string;      // 'anthropic' | 'zai'
   backend?: 'sdk-subscription' | 'cli-direct' | 'channel';
-  claudeModel?: string;  // sonnet/opus/haiku for profile entries
+  claudeModel?: string;  // sonnet/opus/haiku/fable for profile entries
 }
 
 const PROVIDER_OF = (entry: ClaudeModelEntry): ClaudeProvider =>
@@ -51,7 +51,7 @@ const BACKEND_LABEL: Record<string, string> = {
   'channel': 'Channel',
 };
 const PROVIDER_LABEL: Record<ClaudeProvider, string> = { claude: 'Claude', glm: 'GLM' };
-const MODEL_LABEL: Record<string, string> = { sonnet: 'Sonnet', opus: 'Opus', haiku: 'Haiku' };
+const MODEL_LABEL: Record<string, string> = { sonnet: 'Sonnet', opus: 'Opus', haiku: 'Haiku', fable: 'Fable' };
 
 /**
  * Backends that are present-but-locked in the selector. The Channel backend is
@@ -87,7 +87,7 @@ const modelsOf = (models: ClaudeModelEntry[], provider: ClaudeProvider, backend:
   const set = new Set<string>();
   for (const m of profileEntries(models))
     if (PROVIDER_OF(m) === provider && m.backend === backend && m.claudeModel) set.add(m.claudeModel);
-  return ['sonnet', 'opus', 'haiku'].filter((mm) => set.has(mm));
+  return ['sonnet', 'opus', 'haiku', 'fable'].filter((mm) => set.has(mm));
 };
 
 /** Resolve a (provider, backend, model) selection to a `profile:<id>` model id. */
@@ -728,6 +728,7 @@ export function NewSessionModal({ isOpen, onClose, onCreateSession, onOpenDriveM
                     <option value="sonnet">Claude Sonnet</option>
                     <option value="opus">Claude Opus</option>
                     <option value="haiku">Claude Haiku</option>
+                    <option value="fable">Claude Fable</option>
                   </select>
                 </div>
               ) : (
