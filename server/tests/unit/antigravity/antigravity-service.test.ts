@@ -49,11 +49,11 @@ describe('getModelContextWindow', () => {
   });
 
   it('returns 200 K tokens for Claude Sonnet variants', () => {
-    expect(getModelContextWindow('Claude Sonnet 4.6 (Thinking)')).toBe(200_000);
+    expect(getModelContextWindow('Claude Sonnet 5.5 (Medium)')).toBe(200_000);
   });
 
   it('returns 200 K tokens for Claude Opus variants', () => {
-    expect(getModelContextWindow('Claude Opus 4.6 (Thinking)')).toBe(200_000);
+    expect(getModelContextWindow('Claude Opus 5.5 (High)')).toBe(200_000);
   });
 
   it('returns 128 K tokens for GPT-OSS models', () => {
@@ -65,13 +65,13 @@ describe('getModelContextWindow', () => {
   });
 
   it('normalises a provider-prefixed id before matching (RC3)', () => {
-    expect(getModelContextWindow('antigravity/Claude Opus 4.6 (Thinking)')).toBe(200_000);
+    expect(getModelContextWindow('antigravity/Claude Opus 5.5 (High)')).toBe(200_000);
   });
 
   it('matches slug forms (stream-json selector contract)', () => {
     expect(getModelContextWindow('gemini-3.6-flash-low')).toBe(1_048_576);
     expect(getModelContextWindow('gemini-3.1-pro-high')).toBe(2_097_152);
-    expect(getModelContextWindow('claude-sonnet-4-6')).toBe(200_000);
+    expect(getModelContextWindow('claude-sonnet-5-5-medium')).toBe(200_000);
     expect(getModelContextWindow('gpt-oss-120b-medium')).toBe(128_000);
   });
 
@@ -92,7 +92,9 @@ describe('AntigravityService — getAvailableModels', () => {
       'gemini-3.7-flash-high\tGemini 3.7 Flash (High)',
       'gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)',
       'gemini-3.7-flash-low\tGemini 3.7 Flash (Low)',
-      'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+      'claude-sonnet-5-5-low\tClaude Sonnet 5.5 (Low)',
+      'claude-sonnet-5-5-medium\tClaude Sonnet 5.5 (Medium)',
+      'claude-sonnet-5-5-high\tClaude Sonnet 5.5 (High)',
       '',
     ].join('\n');
 
@@ -105,18 +107,22 @@ describe('AntigravityService — getAvailableModels', () => {
       'gemini-3.7-flash-high',
       'gemini-3.7-flash-medium',
       'gemini-3.7-flash-low',
-      'claude-sonnet-4-6',
+      'claude-sonnet-5-5-low',
+      'claude-sonnet-5-5-medium',
+      'claude-sonnet-5-5-high',
     ]);
     expect(models.every((m) => !m.id.includes('\t'))).toBe(true);
     expect(models.map((m) => m.name)).toEqual([
       'Gemini 3.7 Flash (High)',
       'Gemini 3.7 Flash (Medium)',
       'Gemini 3.7 Flash (Low)',
-      'Claude Sonnet 4.6 (Thinking)',
+      'Claude Sonnet 5.5 (Low)',
+      'Claude Sonnet 5.5 (Medium)',
+      'Claude Sonnet 5.5 (High)',
     ]);
     expect(models.every((m) => m.provider === 'antigravity')).toBe(true);
     expect(models.find((m) => m.id === 'gemini-3.7-flash-low')?.thinkingLevels).toEqual(['low', 'medium', 'high']);
-    expect(models.find((m) => m.id === 'claude-sonnet-4-6')?.thinkingLevels).toEqual([]);
+    expect(models.find((m) => m.id === 'claude-sonnet-5-5-low')?.thinkingLevels).toEqual(['low', 'medium', 'high']);
   });
 
   it('passes label-only lines through unchanged (older agy output compatibility)', async () => {

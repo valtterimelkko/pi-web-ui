@@ -1366,14 +1366,24 @@ export class AntigravityService {
       } catch {
         // Conservative fallback when `agy models` cannot run: current-generation
         // entries with empty thinkingLevels (derivation needs real sibling data).
+        // Mirrors the live catalogue read 2026-11-09 (agy 1.5.3): the 4.6 Claude
+        // entries left; Claude/GPT group is Sonnet/Opus 5.5 siblings + GPT-OSS.
         models = toCatalogEntries(
           parseAgyModelsOutput(
             [
-              'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
-              'gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)',
+              'gemini-4-argon-low\tGemini 4 Argon (Low)',
+              'gemini-4-argon-medium\tGemini 4 Argon (Medium)',
+              'gemini-4-argon-high\tGemini 4 Argon (High)',
               'gemini-3.8-flash-low\tGemini 3.8 Flash (Low)',
-              'gemini-3.6-flash-low\tGemini 3.6 Flash (Low)',
-              'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+              'gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)',
+              'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+              'claude-sonnet-5-5-low\tClaude Sonnet 5.5 (Low)',
+              'claude-sonnet-5-5-medium\tClaude Sonnet 5.5 (Medium)',
+              'claude-sonnet-5-5-high\tClaude Sonnet 5.5 (High)',
+              'claude-opus-5-5-low\tClaude Opus 5.5 (Low)',
+              'claude-opus-5-5-medium\tClaude Opus 5.5 (Medium)',
+              'claude-opus-5-5-high\tClaude Opus 5.5 (High)',
+              'gpt-oss-120b-medium\tGPT-OSS 120B (Medium)',
             ].join('\n'),
           ),
         );
