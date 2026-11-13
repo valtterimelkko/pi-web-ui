@@ -679,12 +679,6 @@ export class SessionCleanupService {
     return { files, missing };
   }
 
-  /** Files this deletion would remove that the archive does not hold (null when the guard is off). */
-  private async unarchivedTargets(sessionPath: string): Promise<string[] | null> {
-    const check = await this.guardTargets(sessionPath);
-    return check ? check.missing : null;
-  }
-
   /** Fresh stat of every target, called immediately before the unlinks. */
   private async allArchived(files: string[]): Promise<boolean> {
     for (const file of files) {
