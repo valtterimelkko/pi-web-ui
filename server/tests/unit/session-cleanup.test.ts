@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { SessionCleanupService } from '../../src/session-cleanup.js';
+import { setLogTap } from '../../src/logging/logger.js';
 import { migrateV1ToV2, deriveLegacyArrays, isV2, type V1Preferences } from '../../src/routes/session-meta.js';
 
 const mockRegistryEntries: Map<string, any> = new Map();
@@ -115,10 +116,19 @@ describe('SessionCleanupService', () => {
     }
   }
 
-  function makeService(opts?: { pinInactivityMs?: number; archiveRetentionMs?: number }) {
+  function makeService(opts?: {
+    pinInactivityMs?: number;
+    archiveRetentionMs?: number;
+    requireArchiveRoot?: string;
+    archiveHome?: string;
+    dryRun?: boolean;
+  }) {
     return new SessionCleanupService({
       pinInactivityMs: opts?.pinInactivityMs ?? 24 * 60 * 60 * 1000,
       archiveRetentionMs: opts?.archiveRetentionMs ?? 90 * 24 * 60 * 60 * 1000,
+      deleteRequireArchiveRoot: opts?.requireArchiveRoot,
+      deleteRequireArchiveHome: opts?.archiveHome,
+      dryRun: opts?.dryRun,
       // Pre-funnel tests: stage-1 auto-archive disabled so its writes never
       // interfere with assertions written before the funnel existed.
       autoArchiveMs: 0,
@@ -1037,5 +1047,302 @@ describe('auto-archive funnel', () => {
     const result = await makeFunnelService({ autoArchiveMs: 0 }).runCleanup(prefsPath);
 
     expect(result.autoArchived).toEqual([]);
+  });
+});
+
+
+/**
+ * Delete guard (owner, 13 Nov 2026): before SessionCleanup removes a session's runtime file, the
+ * jev hardlink archive must hold that file. Otherwise the deletion is skipped for this pass, the
+ * registry entry and the prefs record are kept, and `[SessionCleanup] not archived yet: <id>` is
+ * logged. With SESSION_DELETE_REQUIRE_ARCHIVE_ROOT unset nothing changes.
+ *
+ * The archive mirrors the home layout (jev-session-eval's archive.py hardlinks each transcript to
+ * <archive root>/<home-relative path>), so a pass with the guard configured needs both the archive
+ * root and the home it mirrors.
+ */
+describe('delete guard: never delete what the jev archive does not hold', () => {
+  let tmpDir: string;
+  let prefsPath: string;
+  let archiveRoot: string;
+  const DAY = 24 * 60 * 60 * 1000;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cleanup-guard-'));
+    prefsPath = path.join(tmpDir, 'prefs.json');
+    archiveRoot = path.join(tmpDir, 'jev-archive');
+    mockRegistryEntries.clear();
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    delete process.env.SESSION_DELETE_REQUIRE_ARCHIVE_ROOT;
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  async function writeV1Prefs(prefs: Record<string, any>): Promise<void> {
+    const onDisk = isV2(prefs) ? prefs : migrateV1ToV2(prefs as V1Preferences, () => null, Date.now());
+    await fs.writeFile(prefsPath, JSON.stringify(onDisk), 'utf-8');
+  }
+
+  async function readPrefs(): Promise<Record<string, any>> {
+    const raw = JSON.parse(await fs.readFile(prefsPath, 'utf-8'));
+    return isV2(raw) ? { ...raw, ...deriveLegacyArrays(raw) } : raw;
+  }
+
+  function service(opts: { requireArchiveRoot?: string | null; dryRun?: boolean } = {}) {
+    return new SessionCleanupService({
+      pinInactivityMs: 24 * 60 * 60 * 1000,
+      archiveRetentionMs: 90 * DAY,
+      autoArchiveMs: 0,
+      dryRun: opts.dryRun ?? false,
+      retentionMinDwellMs: 7 * DAY,
+      cleanupIntervalMs: 999999999,
+      piSessionDir: path.join(tmpDir, 'pi-sessions'),
+      claudeSessionDir: path.join(tmpDir, 'claude-sessions'),
+      antigravitySessionDir: path.join(tmpDir, 'antigravity-sessions'),
+      devinSessionDir: path.join(tmpDir, 'devin-sessions'),
+      deleteRequireArchiveRoot: opts.requireArchiveRoot === undefined ? archiveRoot : (opts.requireArchiveRoot ?? undefined),
+      deleteRequireArchiveHome: tmpDir,
+    });
+  }
+
+  function bind(svc: any) {
+    svc.bindRuntimes({
+      multiSessionManager: makeMultiSessionManager(),
+      claudeService: makeClaudeService(),
+      opencodeService: makeOpenCodeService(),
+      antigravityService: makeAntigravityService(),
+      devinService: makeDevinService(),
+    });
+  }
+
+  /** An old (past retention) pi session file plus its archived state. */
+  async function oldPiSession(name = '2026-06-01T00-00-00-000Z_guard.jsonl'): Promise<string> {
+    const dir = path.join(tmpDir, 'pi-sessions', '--root--');
+    await fs.mkdir(dir, { recursive: true });
+    const file = path.join(dir, name);
+    await fs.writeFile(file, '{"type":"session","id":"guard"}\n', 'utf-8');
+    const old = new Date(Date.now() - 95 * DAY);
+    await fs.utimes(file, old, old);
+    await writeV1Prefs({ archivedSessionPaths: [file], pinnedSessionPaths: [] });
+    return file;
+  }
+
+  /** The archive copy jev would have made: a hardlink at the home-relative path. */
+  async function archiveCopy(file: string): Promise<string> {
+    const dest = path.join(archiveRoot, path.relative(tmpDir, file));
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.link(file, dest);
+    return dest;
+  }
+
+  it('deletes a session whose runtime file the archive holds (hardlink, same inode)', async () => {
+    const file = await oldPiSession();
+    const dest = await archiveCopy(file);
+    const svc = service();
+    bind(svc);
+
+    const result = await svc.runCleanup(prefsPath);
+
+    expect(result.deleted).toContain(file);
+    expect(result.skippedUnarchived).toEqual([]);
+    await expect(fs.stat(file)).rejects.toThrow();
+    await expect(fs.stat(dest)).resolves.toBeDefined();   // the archive keeps the data
+    const prefs = await readPrefs();
+    expect(prefs.archivedSessionPaths).not.toContain(file);
+  });
+
+  it('keeps a session the archive has never seen, and logs it', async () => {
+    const file = await oldPiSession();
+    const records: any[] = [];
+    setLogTap((r) => records.push(r));
+    const svc = service();
+    bind(svc);
+
+    try {
+      const result = await svc.runCleanup(prefsPath);
+
+      expect(result.deleted).not.toContain(file);
+      expect(result.skippedUnarchived).toContain(file);
+      expect(result.errors).toEqual([]);
+      await expect(fs.stat(file)).resolves.toBeDefined();
+      // the registry entry and the prefs record survive for the next pass
+      expect((await readPrefs()).archivedSessionPaths).toContain(file);
+      const line = records.find((r) => String(r.msg).includes('not archived yet'));
+      expect(line).toBeDefined();
+      expect(line.component).toBe('SessionCleanup');
+      expect(String(line.msg)).toContain(`not archived yet: ${file}`);
+    } finally {
+      setLogTap(null);
+    }
+  });
+
+  it('keeps a Claude copy the archive does not hold, and its registry entry', async () => {
+    const id = 'old-claude-guard';
+    const dir = path.join(tmpDir, 'claude-sessions');
+    await fs.mkdir(dir, { recursive: true });
+    const file = path.join(dir, `${id}.jsonl`);
+    await fs.writeFile(file, '{"type":"user","content":"hi"}\n', 'utf-8');
+    const old = new Date(Date.now() - 95 * DAY);
+    await fs.utimes(file, old, old);
+    await writeV1Prefs({ archivedSessionPaths: [file], pinnedSessionPaths: [] });
+    mockRegistryEntries.set(id, { id, sdkType: 'claude', path: file, lastActivity: old.toISOString(), status: 'idle' });
+    const svc = service();
+    bind(svc);
+
+    const result = await svc.runCleanup(prefsPath);
+
+    expect(result.skippedUnarchived).toContain(file);
+    await expect(fs.stat(file)).resolves.toBeDefined();
+    expect(mockRegistryEntries.has(id)).toBe(true);
+  });
+
+  it('refuses an archive copy that is older than a rewritten live file', async () => {
+    const file = await oldPiSession();
+    const dest = await archiveCopy(file);
+    // the session was appended to after the snapshot: atomic rewrite → new inode, newer, larger
+    const tmp = `${file}.new`;
+    await fs.writeFile(tmp, '{"type":"session","id":"guard"}\n' + 'x'.repeat(200), 'utf-8');
+    await fs.rename(tmp, file);
+    const old = new Date(Date.now() - 95 * DAY);
+    await fs.utimes(file, old, old); // still an old session: the retention clock is unchanged
+    const svc = service();
+    bind(svc);
+
+    const first = await svc.runCleanup(prefsPath);
+    expect(first.skippedUnarchived).toContain(file);
+    await expect(fs.stat(file)).resolves.toBeDefined();
+
+    // the next snapshot re-links it; now the guard allows the deletion
+    await fs.rm(dest);
+    await archiveCopy(file);
+    const second = await svc.runCleanup(prefsPath);
+    expect(second.deleted).toContain(file);
+  });
+
+  it('allows every deletion when no archive root is configured (today\'s behaviour)', async () => {
+    const file = await oldPiSession();
+    const svc = service({ requireArchiveRoot: null });
+    bind(svc);
+
+    const result = await svc.runCleanup(prefsPath);
+
+    expect(result.deleted).toContain(file);
+    expect(result.skippedUnarchived).toEqual([]);
+    await expect(fs.stat(file)).rejects.toThrow();
+  });
+
+  it('picks the archive root up from SESSION_DELETE_REQUIRE_ARCHIVE_ROOT', async () => {
+    const file = await oldPiSession();
+    process.env.SESSION_DELETE_REQUIRE_ARCHIVE_ROOT = archiveRoot;
+    const svc = new SessionCleanupService({
+      archiveRetentionMs: 90 * DAY,
+      autoArchiveMs: 0,
+      dryRun: false,
+      retentionMinDwellMs: 7 * DAY,
+      piSessionDir: path.join(tmpDir, 'pi-sessions'),
+      claudeSessionDir: path.join(tmpDir, 'claude-sessions'),
+      antigravitySessionDir: path.join(tmpDir, 'antigravity-sessions'),
+      devinSessionDir: path.join(tmpDir, 'devin-sessions'),
+      deleteRequireArchiveHome: tmpDir,
+    });
+    bind(svc);
+
+    const result = await svc.runCleanup(prefsPath);
+
+    expect(result.skippedUnarchived).toContain(file);
+    await expect(fs.stat(file)).resolves.toBeDefined();
+  });
+
+  it('with the guard off, still reports every deletion in a dry run', async () => {
+    const file = await oldPiSession();
+    const svc = service({ dryRun: true, requireArchiveRoot: null });
+    bind(svc);
+
+    const result = await svc.runCleanup(prefsPath);
+
+    expect(result.wouldDelete).toContain(file);
+    expect(result.skippedUnarchived).toEqual([]);
+    expect(result.deleted).toEqual([]);
+    await expect(fs.stat(file)).resolves.toBeDefined();
+  });
+
+  it('with the guard on, a dry run reports what it would keep instead of over-stating the deletion', async () => {
+    const archived = await oldPiSession('2026-06-01T00-00-00-000Z_arch.jsonl');
+    const unarchived = await oldPiSession('2026-06-02T00-00-00-000Z_unarch.jsonl');
+    await archiveCopy(archived);
+    // both are archived in prefs; the fixture above overwrote the prefs each time, so restore both
+    await writeV1Prefs({ archivedSessionPaths: [archived, unarchived], pinnedSessionPaths: [] });
+    const svc = service({ dryRun: true });
+    bind(svc);
+
+    const result = await svc.runCleanup(prefsPath);
+
+    expect(result.wouldDelete).toContain(archived);
+    expect(result.wouldDelete).not.toContain(unarchived);
+    expect(result.skippedUnarchived).toEqual([unarchived]);
+    expect(result.deleted).toEqual([]);
+    await expect(fs.stat(archived)).resolves.toBeDefined();
+    await expect(fs.stat(unarchived)).resolves.toBeDefined();
+  });
+
+  it('names the archive root at construction when the guard is on, and warns when the env value is empty', async () => {
+    const records: any[] = [];
+    setLogTap((r) => records.push(r));
+    try {
+      service();
+      const on = records.find((r) => String(r.msg).includes('guard ON'));
+      expect(on).toBeDefined();
+      expect(String(on.msg)).toContain(archiveRoot);
+
+      records.length = 0;
+      process.env.SESSION_DELETE_REQUIRE_ARCHIVE_ROOT = '';
+      new SessionCleanupService({ piSessionDir: path.join(tmpDir, 'pi-sessions') });
+      const off = records.find((r) => String(r.msg).includes('set but empty'));
+      expect(off).toBeDefined();
+      expect(off.level).toBe('warn');
+    } finally {
+      setLogTap(null);
+    }
+  });
+
+  it('re-checks the archive immediately before deleting (a file rewritten in the gap is kept)', async () => {
+    const file = await oldPiSession();
+    await archiveCopy(file);
+    const svc = service();
+    bind(svc);
+    // First isArchived call is the pass-level check (passes); every later call answers "not archived",
+    // i.e. the file was rewritten between the check and the unlink.
+    const spy = vi.spyOn(svc as any, 'isArchived');
+    const real = spy.getMockImplementation();
+    let calls = 0;
+    spy.mockImplementation(async (p: string) => (++calls <= 1 ? true : false));
+
+    const result = await svc.runCleanup(prefsPath);
+
+    expect(result.deleted).not.toContain(file);
+    expect(result.skippedUnarchived).toContain(file);
+    await expect(fs.stat(file)).resolves.toBeDefined();
+    spy.mockRestore();
+    void real;
+  });
+
+  it('refuses a candidate it cannot stat for any reason other than ENOENT', async () => {
+    const dir = path.join(tmpDir, 'pi-sessions', '--root--');
+    await fs.mkdir(dir, { recursive: true });
+    const file = path.join(dir, '2026-06-01T00-00-00-000Z_loop.jsonl');
+    await fs.symlink(file, file); // a self-referential link: stat fails with ELOOP, not ENOENT
+    const old = new Date(Date.now() - 95 * DAY);
+    await fs.lutimes(file, old, old);
+    await writeV1Prefs({ archivedSessionPaths: [file], pinnedSessionPaths: [] });
+    const svc = service();
+    bind(svc);
+
+    const result = await svc.runCleanup(prefsPath);
+
+    expect(result.deleted).not.toContain(file);
+    expect(result.skippedUnarchived).toContain(file);
+    await expect(fs.lstat(file)).resolves.toBeDefined();
   });
 });
