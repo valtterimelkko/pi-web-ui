@@ -112,6 +112,9 @@ export class SessionCleanupService {
   constructor(
     cleanupConfig?: Partial<SessionCleanupConfig>,
   ) {
+    const configuredRoot = cleanupConfig?.deleteRequireArchiveRoot;
+    const envRoot = process.env.SESSION_DELETE_REQUIRE_ARCHIVE_ROOT;
+    const guardRoot = configuredRoot ?? (envRoot && envRoot.trim() ? envRoot.trim() : undefined);
     this.config = {
       pinInactivityMs: cleanupConfig?.pinInactivityMs ?? DEFAULT_PIN_INACTIVITY_MS,
       archiveRetentionMs: cleanupConfig?.archiveRetentionMs ?? DEFAULT_ARCHIVE_RETENTION_MS,
@@ -123,10 +126,22 @@ export class SessionCleanupService {
       claudeSessionDir: cleanupConfig?.claudeSessionDir ?? config.claudeSessionDir,
       antigravitySessionDir: cleanupConfig?.antigravitySessionDir ?? config.antigravitySessionDir,
       devinSessionDir: cleanupConfig?.devinSessionDir ?? config.devinSessionDir,
-      deleteRequireArchiveRoot:
-        cleanupConfig?.deleteRequireArchiveRoot ?? (process.env.SESSION_DELETE_REQUIRE_ARCHIVE_ROOT || undefined),
+      deleteRequireArchiveRoot: guardRoot,
       deleteRequireArchiveHome: cleanupConfig?.deleteRequireArchiveHome ?? os.homedir(),
     };
+    // Log the guard's state once, at construction (the service is a singleton): an operator reading
+    // the journal must be able to tell whether deletions are guarded, and a blank value in
+    // production.env must not disable the guard silently.
+    if (guardRoot) {
+      logger.info(
+        `[SessionCleanup] Delete guard ON: no runtime file is deleted until the jev archive holds it (${guardRoot})`,
+      );
+    } else if (configuredRoot === undefined && envRoot !== undefined && envRoot.trim() === '') {
+      logger.warn(
+        '[SessionCleanup] SESSION_DELETE_REQUIRE_ARCHIVE_ROOT is set but empty — the archive delete guard is OFF. ' +
+        'A blank value in production.env silently disables it; unset the variable or name the archive root.',
+      );
+    }
   }
 
   bindRuntimes(opts: {
@@ -423,7 +438,16 @@ export class SessionCleanupService {
     if (toDelete.length === 0) return;
 
     if (this.config.dryRun) {
-      result.wouldDelete.push(...toDelete.map(({ path }) => path));
+      // Report what a live pass would actually do: with the guard on, a candidate the archive does
+      // not hold would be kept, and saying otherwise over-states the deletion.
+      for (const { path: sessionPath } of toDelete) {
+        const check = await this.guardTargets(sessionPath);
+        if (check && (check.missing.length > 0 || !(await this.allArchived(check.files)))) {
+          result.skippedUnarchived.push(sessionPath);
+        } else {
+          result.wouldDelete.push(sessionPath);
+        }
+      }
       return;
     }
 
@@ -431,8 +455,16 @@ export class SessionCleanupService {
       try {
         // Delete guard: keep the session (files, registry entry and prefs record) while the jev
         // archive does not yet hold its runtime files. Nothing is lost — the next pass retries.
-        const unarchived = await this.unarchivedTargets(sessionPath);
-        if (unarchived && unarchived.length > 0) {
+        // The files are re-stat'ed immediately before the unlinks below: a transcript rewritten in
+        // the gap between the pass-level check and the deletion must not lose its new tail.
+        //
+        // Scope: this guard covers SessionCleanup only. UI deletes and Internal API ephemeral
+        // deletes remove runtime files through their own `deleteSessionFiles` in
+        // internal-api/routes/sessions.ts and are NOT guarded — their copy survives only if the
+        // daily archive snapshot ran in between. Read this as "retention never deletes unarchived
+        // data", not "no runtime file is ever deleted before it is archived".
+        const check = await this.guardTargets(sessionPath);
+        if (check && (check.missing.length > 0 || !(await this.allArchived(check.files)))) {
           result.skippedUnarchived.push(sessionPath);
           logger.info(`[SessionCleanup] not archived yet: ${sessionPath}`);
           continue;
@@ -579,8 +611,10 @@ export class SessionCleanupService {
   }
 
   /** Every runtime file this candidate's deletion would remove, restricted to files on disk
-   * (directories are expanded, because a pi session directory is removed recursively). */
-  private async deleteTargetsFor(sessionPath: string): Promise<string[]> {
+   * (directories are expanded, because a pi session directory is removed recursively), plus the
+   * paths that could not be stat'ed for a reason other than ENOENT: those are unverified, and an
+   * unverified file is treated as not archived. */
+  private async deleteTargetsFor(sessionPath: string): Promise<{ files: string[]; unverified: string[] }> {
     const candidates = new Set<string>();
     const entry = await this.registryEntryFor(sessionPath);
     if (entry) {
@@ -614,26 +648,49 @@ export class SessionCleanupService {
       candidates.add(path.join(this.config.devinSessionDir, `${sessionPath}.jsonl`));
     }
     const files: string[] = [];
+    const unverified: string[] = [];
     for (const candidate of candidates) {
-      const stat = await fs.stat(candidate).catch(() => null);
-      if (!stat) continue; // already gone: nothing to lose
+      const stat = await fs.stat(candidate).catch((err: NodeJS.ErrnoException) => {
+        if (err.code === 'ENOENT') return null; // already gone: nothing to lose
+        return undefined; // EACCES, EIO, ELOOP …: cannot verify, so do not delete
+      });
+      if (stat === null) continue;
+      if (stat === undefined) {
+        unverified.push(candidate);
+        continue;
+      }
       files.push(...(stat.isDirectory() ? await this.walkFiles(candidate) : [candidate]));
     }
-    return files;
+    return { files, unverified };
   }
 
   /**
-   * Files this deletion would remove that the archive does not hold. `null` when the guard is off
-   * (`SESSION_DELETE_REQUIRE_ARCHIVE_ROOT` unset), which keeps every other host and every existing
-   * test on the previous behaviour.
+   * The deletion's target files and the ones the archive does not hold. `null` when the guard is
+   * off (`SESSION_DELETE_REQUIRE_ARCHIVE_ROOT` unset), which keeps every other host and every
+   * existing test on the previous behaviour.
    */
-  private async unarchivedTargets(sessionPath: string): Promise<string[] | null> {
+  private async guardTargets(sessionPath: string): Promise<{ files: string[]; missing: string[] } | null> {
     if (!this.config.deleteRequireArchiveRoot) return null;
-    const missing: string[] = [];
-    for (const file of await this.deleteTargetsFor(sessionPath)) {
+    const { files, unverified } = await this.deleteTargetsFor(sessionPath);
+    const missing = [...unverified];
+    for (const file of files) {
       if (!(await this.isArchived(file))) missing.push(file);
     }
-    return missing;
+    return { files, missing };
+  }
+
+  /** Files this deletion would remove that the archive does not hold (null when the guard is off). */
+  private async unarchivedTargets(sessionPath: string): Promise<string[] | null> {
+    const check = await this.guardTargets(sessionPath);
+    return check ? check.missing : null;
+  }
+
+  /** Fresh stat of every target, called immediately before the unlinks. */
+  private async allArchived(files: string[]): Promise<boolean> {
+    for (const file of files) {
+      if (!(await this.isArchived(file))) return false;
+    }
+    return true;
   }
 
   private async deleteRuntimeFileByPath(sessionPath: string): Promise<void> {

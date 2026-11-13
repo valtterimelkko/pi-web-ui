@@ -1255,9 +1255,9 @@ describe('delete guard: never delete what the jev archive does not hold', () => 
     await expect(fs.stat(file)).resolves.toBeDefined();
   });
 
-  it('leaves the dry-run report untouched (it deletes nothing either way)', async () => {
+  it('with the guard off, still reports every deletion in a dry run', async () => {
     const file = await oldPiSession();
-    const svc = service({ dryRun: true });
+    const svc = service({ dryRun: true, requireArchiveRoot: null });
     bind(svc);
 
     const result = await svc.runCleanup(prefsPath);
@@ -1266,5 +1266,83 @@ describe('delete guard: never delete what the jev archive does not hold', () => 
     expect(result.skippedUnarchived).toEqual([]);
     expect(result.deleted).toEqual([]);
     await expect(fs.stat(file)).resolves.toBeDefined();
+  });
+
+  it('with the guard on, a dry run reports what it would keep instead of over-stating the deletion', async () => {
+    const archived = await oldPiSession('2026-06-01T00-00-00-000Z_arch.jsonl');
+    const unarchived = await oldPiSession('2026-06-02T00-00-00-000Z_unarch.jsonl');
+    await archiveCopy(archived);
+    // both are archived in prefs; the fixture above overwrote the prefs each time, so restore both
+    await writeV1Prefs({ archivedSessionPaths: [archived, unarchived], pinnedSessionPaths: [] });
+    const svc = service({ dryRun: true });
+    bind(svc);
+
+    const result = await svc.runCleanup(prefsPath);
+
+    expect(result.wouldDelete).toContain(archived);
+    expect(result.wouldDelete).not.toContain(unarchived);
+    expect(result.skippedUnarchived).toEqual([unarchived]);
+    expect(result.deleted).toEqual([]);
+    await expect(fs.stat(archived)).resolves.toBeDefined();
+    await expect(fs.stat(unarchived)).resolves.toBeDefined();
+  });
+
+  it('names the archive root at construction when the guard is on, and warns when the env value is empty', async () => {
+    const records: any[] = [];
+    setLogTap((r) => records.push(r));
+    try {
+      service();
+      const on = records.find((r) => String(r.msg).includes('guard ON'));
+      expect(on).toBeDefined();
+      expect(String(on.msg)).toContain(archiveRoot);
+
+      records.length = 0;
+      process.env.SESSION_DELETE_REQUIRE_ARCHIVE_ROOT = '';
+      new SessionCleanupService({ piSessionDir: path.join(tmpDir, 'pi-sessions') });
+      const off = records.find((r) => String(r.msg).includes('set but empty'));
+      expect(off).toBeDefined();
+      expect(off.level).toBe('warn');
+    } finally {
+      setLogTap(null);
+    }
+  });
+
+  it('re-checks the archive immediately before deleting (a file rewritten in the gap is kept)', async () => {
+    const file = await oldPiSession();
+    await archiveCopy(file);
+    const svc = service();
+    bind(svc);
+    // First isArchived call is the pass-level check (passes); every later call answers "not archived",
+    // i.e. the file was rewritten between the check and the unlink.
+    const spy = vi.spyOn(svc as any, 'isArchived');
+    const real = spy.getMockImplementation();
+    let calls = 0;
+    spy.mockImplementation(async (p: string) => (++calls <= 1 ? true : false));
+
+    const result = await svc.runCleanup(prefsPath);
+
+    expect(result.deleted).not.toContain(file);
+    expect(result.skippedUnarchived).toContain(file);
+    await expect(fs.stat(file)).resolves.toBeDefined();
+    spy.mockRestore();
+    void real;
+  });
+
+  it('refuses a candidate it cannot stat for any reason other than ENOENT', async () => {
+    const dir = path.join(tmpDir, 'pi-sessions', '--root--');
+    await fs.mkdir(dir, { recursive: true });
+    const file = path.join(dir, '2026-06-01T00-00-00-000Z_loop.jsonl');
+    await fs.symlink(file, file); // a self-referential link: stat fails with ELOOP, not ENOENT
+    const old = new Date(Date.now() - 95 * DAY);
+    await fs.lutimes(file, old, old);
+    await writeV1Prefs({ archivedSessionPaths: [file], pinnedSessionPaths: [] });
+    const svc = service();
+    bind(svc);
+
+    const result = await svc.runCleanup(prefsPath);
+
+    expect(result.deleted).not.toContain(file);
+    expect(result.skippedUnarchived).toContain(file);
+    await expect(fs.lstat(file)).resolves.toBeDefined();
   });
 });
