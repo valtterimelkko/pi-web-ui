@@ -16,9 +16,9 @@
  * fails the spawn.
  */
 import fs from 'node:fs';
-import { createLogger } from './logging/logger.js';
 
-const logger = createLogger('OomScoreAdj');
+// Deliberately no logger import: this helper is also loaded by scripts/live-validate.ts through
+// live-validation/scenarios.ts, and the logger pulls in the whole server config graph.
 
 /** The oom_score_adj every spawned child-runtime process is reset to. */
 export const CHILD_OOM_SCORE_ADJ = '0';
@@ -32,7 +32,7 @@ export interface ChildOomScoreAdjDeps {
   writeScore?: (path: string, value: string) => void;
   /** Score-file path for a pid (default `/proc/<pid>/oom_score_adj`). */
   scoreFilePath?: (pid: number) => string;
-  /** Warning sink (default logger.warn). */
+  /** Warning sink (default: one stderr line). */
   warn?: (message: string) => void;
 }
 
@@ -64,7 +64,7 @@ export function applyChildOomScoreAdj(
   } catch (error) {
     if (!loggedSites.has(site)) {
       loggedSites.add(site);
-      const warn = deps.warn ?? ((message: string) => logger.warn(message));
+      const warn = deps.warn ?? ((message: string) => process.stderr.write(`[OomScoreAdj] ${message}\n`));
       warn(`oom_score_adj reset failed for ${site} child pid ${pid} (child keeps its inherited score): ${error instanceof Error ? error.message : String(error)}`);
     }
     return false;
