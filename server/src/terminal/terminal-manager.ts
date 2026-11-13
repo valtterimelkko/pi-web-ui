@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { createLogger } from '../logging/logger.js';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import { planSpawnOwn, placementForSpawn, appendDegradeLine } from '../placement/index.js';
 
 const logger = createLogger('TerminalManager');
@@ -113,6 +114,8 @@ export class TerminalManager {
         throw err;
       }
     }
+    // Lane oom: terminal shells must not keep the server's -500.
+    applyChildOomScoreAdj(process_, 'terminal');
 
     const now = Date.now();
     const session: TerminalSession = {

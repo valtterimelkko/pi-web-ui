@@ -4,6 +4,7 @@ import { readFile as readFileFs } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 
 export interface WorkerAssignmentIdentity {
   sessionId: string;
@@ -97,6 +98,8 @@ export class PlainWorkerLauncher implements WorkerLauncher {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: spec.env,
     });
+    // Lane oom: pi workers must not keep the server's -500.
+    applyChildOomScoreAdj(process, 'pi-worker');
     return {
       process,
       resourceIdentity: {
@@ -264,6 +267,8 @@ export class TransientSystemdWorkerLauncher implements WorkerLauncher {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: spec.env,
     });
+    // Lane oom: the systemd-run launcher child must not keep the server's -500.
+    applyChildOomScoreAdj(process, 'pi-worker-run');
 
     try {
       const observed = await this.observeIdentity(unitName, sliceName, process.pid, launchToken);

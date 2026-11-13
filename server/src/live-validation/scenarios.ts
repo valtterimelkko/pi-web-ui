@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import type {
@@ -680,6 +681,8 @@ export const scenarioRegistry: Record<string, ValidationScenario> = {
         childEnv.C5_BODY = createBody;
         if (headerParent) childEnv.C5_HEADER = headerParent; else delete childEnv.C5_HEADER;
         const child = spawn(process.execPath, ['-e', script], { env: childEnv, stdio: ['ignore', 'pipe', 'ignore'] });
+        // Lane oom: scenario children (heap-soak stresses memory) must not keep -500.
+        applyChildOomScoreAdj(child, 'live-validation');
         let out = '';
         child.stdout.on('data', (d: Buffer) => { out += d.toString(); });
         const timer = setTimeout(() => child.kill('SIGKILL'), 15_000);

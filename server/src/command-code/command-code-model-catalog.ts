@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { planSpawnOwn, placementForSpawn } from '../placement/index.js';
 import { spawn } from 'node:child_process';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import { COMMAND_CODE_EFFORT_TABLE } from './command-code-model-efforts.js';
 
 /**
@@ -180,6 +181,7 @@ async function runDiscoveryCommand(
     stdio: ['ignore', 'pipe', 'pipe'],
     env: launch.env,
   });
+  applyChildOomScoreAdj(child, 'command-code-probe');
   let stdout = '';
   let stderr = '';
   child.stdout?.setEncoding('utf8');

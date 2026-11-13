@@ -6,6 +6,7 @@
  */
 
 import { spawn, ChildProcess } from 'node:child_process';
+import { applyChildOomScoreAdj } from '../../oom-score-adj.js';
 import { planSpawnForSession, placementForSpawn } from '../../placement/index.js';
 import type { WorktreeManager, WorktreeInfo } from './worktree-manager.js';
 import type { TaskNode } from './plan-parser.js';
@@ -214,6 +215,8 @@ export class SessionOrchestrator {
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: false,
       });
+      // Lane oom: the pi child must not keep the server's -500.
+      applyChildOomScoreAdj(childProcess, 'pi-parallel');
 
       session.process = childProcess;
       session.status = 'running';

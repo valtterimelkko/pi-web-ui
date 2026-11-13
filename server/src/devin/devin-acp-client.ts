@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import { applySessionIdentityEnv, type SessionEnvIdentity } from '../session-env-identity.js';
 import { devinSpawnEnv } from './devin-spawn-env.js';
 import { isAgentToClientRequest, nextRequestId, parseAcpLine, type AcpMessage } from './devin-acp-protocol.js';
@@ -114,6 +115,8 @@ export class DevinAcpClient {
       env: this.childEnv(),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    // Lane oom: the long-lived devin acp child must not keep the server's -500.
+    applyChildOomScoreAdj(child, 'devin-acp');
     this.child = child;
     this.hasExited = false;
     this.exitCode = null;

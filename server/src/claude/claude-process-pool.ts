@@ -5,6 +5,7 @@
  */
 
 import { spawn, ChildProcess, execSync } from 'node:child_process';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import { planSpawnForSession, placementForSpawn } from '../placement/index.js';
 import { createInterface } from 'node:readline';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -219,6 +220,9 @@ export class ClaudeProcessPool {
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
+    // Lane oom: the claude child (the placement wrapper's pid when placed —
+    // it execs into claude keeping the same pid) must not keep the server's -500.
+    applyChildOomScoreAdj(proc, 'claude-cli');
 
     const active: ActiveProcess = {
       sessionId: options.sessionId,

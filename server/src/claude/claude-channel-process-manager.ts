@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { planSpawnOwn, placementForSpawn } from '../placement/index.js';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import pty from 'node-pty';
@@ -133,6 +134,8 @@ export class ClaudeChannelProcessManager extends EventEmitter {
       cwd: this.cfg.cwd,
       env: channelLaunch.env,
     });
+    // Lane oom: the channel PTY host must not keep the server's -500.
+    applyChildOomScoreAdj(proc, 'claude-channel');
 
     this.ptyProcess = proc;
     this.state.pid = proc.pid;

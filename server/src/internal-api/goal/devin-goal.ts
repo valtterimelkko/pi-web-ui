@@ -24,6 +24,7 @@
 import { exec } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { applyChildOomScoreAdj } from '../../oom-score-adj.js';
 import type { DevinCompletedTurn } from '../../devin/devin-service.js';
 import type { GoalVerificationInfo, SessionGoalProjection } from './types.js';
 
@@ -256,7 +257,8 @@ export function verifyDevinGoalTurn(input: AgyGoalVerifyInput): Promise<AgyGoalV
   }
   const command: string = input.verifyCommand;
   return new Promise((resolve) => {
-    exec(
+    // Lane oom: the goal verify command is a server-spawned child — reset its score.
+    const child = exec(
       command,
       { cwd: input.cwd, timeout: input.timeoutMs, windowsHide: true },
       (error, _stdout, stderr) => {
@@ -279,6 +281,7 @@ export function verifyDevinGoalTurn(input: AgyGoalVerifyInput): Promise<AgyGoalV
         }
       },
     );
+    applyChildOomScoreAdj(child, 'goal-verify');
   });
 }
 

@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import path from 'node:path';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import { planSpawnForSession, placementForSpawn } from '../placement/index.js';
 import { buildCommandCodeArgs } from './command-code-config.js';
 import { applySessionIdentityEnv, type SessionEnvIdentity } from '../session-env-identity.js';
@@ -122,6 +123,8 @@ export class CommandCodeProcessRunner {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: launch.env,
     });
+    // Lane oom: the cmdc child must not keep the server's -500.
+    applyChildOomScoreAdj(child, 'command-code');
     const parser = new CommandCodeNdjsonParser({
       maxLineBytes: this.maxStdoutLineBytes,
       maxAggregateBytes: this.maxStdoutBytes,

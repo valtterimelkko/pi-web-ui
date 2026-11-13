@@ -17,6 +17,7 @@
 
 import { execFile as nodeExecFile } from 'node:child_process';
 import type { ExecFileException } from 'node:child_process';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 
 export const NOTIFICATION_ACTION_HANDLERS_ENV = 'NOTIFICATION_ACTION_HANDLERS';
 
@@ -176,9 +177,11 @@ export async function runNotificationActionHandler(
 
   const outcome = await new Promise<{ error: ExecFileException | null; stdout: string | Buffer; stderr: string | Buffer }>(
     (resolve) => {
-      execFile(definition.command, argv, { timeout: timeoutMs }, (error, stdout, stderr) => {
+      const child = execFile(definition.command, argv, { timeout: timeoutMs }, (error, stdout, stderr) => {
         resolve({ error, stdout, stderr });
       });
+      // Lane oom: handler commands are server-spawned children — reset their score.
+      applyChildOomScoreAdj(child as { pid?: number } | null | undefined, 'notify-handler');
     },
   );
 

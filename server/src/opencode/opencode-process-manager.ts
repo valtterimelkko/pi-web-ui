@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { execSync } from 'node:child_process';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import { planSpawnOwn, placementForSpawn } from '../placement/index.js';
 import type { OpenCodeConfig } from './opencode-types.js';
 import { createLogger } from '../logging/logger.js';
@@ -88,6 +89,8 @@ export class OpenCodeProcessManager {
       env: launch.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    // Lane oom: the managed opencode server must not keep the server's -500.
+    applyChildOomScoreAdj(this.process, 'opencode-serve');
 
     this.process.on('error', (err) => {
       logger.error('[OpenCodeProcessManager] Process error:', err.message);

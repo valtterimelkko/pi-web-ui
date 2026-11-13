@@ -17,9 +17,10 @@
 
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import type { NormalizedEvent } from '@pi-web-ui/shared';
-import { query, type Options, type PermissionResult, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, type Options, type PermissionResult, type SDKUserMessage, type SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import { SteerablePromptStream } from './claude-steer-stream.js';
 import { ClaudeSessionStore } from './claude-session-store.js';
 import { ClaudeSdkEventAdapter } from './claude-sdk-event-adapter.js';
@@ -49,6 +50,48 @@ import { createLogger } from '../logging/logger.js';
 import { applySessionIdentityEnv, sessionIdentityFromEntry, type SessionEnvIdentity } from '../session-env-identity.js';
 
 const logger = createLogger('ClaudeSdkService');
+
+/**
+ * Lane oom: the SDK's own default `spawnLocalProcess` shape, replicated so every
+ * SDK-spawned claude child is passed through {@link applyChildOomScoreAdj} —
+ * otherwise it keeps the control plane's inherited -500. Mirrors the SDK
+ * default exactly: stdin/stdout piped, stderr piped only when
+ * DEBUG_CLAUDE_AGENT_SDK is truthy or Options.stderr is set (forwarded to it),
+ * windowsHide, and the forwarded abort signal (already the SDK's post-grace
+ * signal — safe to hand to spawn()). `sdkOpts` is read lazily so a stderr
+ * handler attached later still wins.
+ */
+function createClaudeCodeChildSpawn(sdkOpts: Options): NonNullable<Options['spawnClaudeCodeProcess']> {
+  return (spawnOpts) => {
+    const pipeStderr = isTruthySdkEnv(spawnOpts.env?.DEBUG_CLAUDE_AGENT_SDK) || sdkOpts.stderr !== undefined;
+    const child = spawn(spawnOpts.command, spawnOpts.args, {
+      cwd: spawnOpts.cwd,
+      env: spawnOpts.env,
+      signal: spawnOpts.signal,
+      stdio: ['pipe', 'pipe', pipeStderr ? 'pipe' : 'ignore'],
+      windowsHide: true,
+    });
+    if (pipeStderr) {
+      child.stderr?.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        if (sdkOpts.stderr) sdkOpts.stderr(text);
+        else logger.debug(`claude stderr: ${text}`);
+      });
+    }
+    // Lane oom: the SDK-spawned claude child must not keep the server's -500.
+    applyChildOomScoreAdj(child, 'claude-sdk');
+    // stdio[0..1] are always piped above, so stdin/stdout are non-null; a
+    // ChildProcess already satisfies the SpawnedProcess interface at runtime.
+    return child as unknown as SpawnedProcess;
+  };
+}
+
+/** Mirrors the SDK's own truthy env check (`Ee` in sdk.mjs). */
+function isTruthySdkEnv(value: unknown): boolean {
+  if (!value) return false;
+  if (typeof value === 'boolean') return value;
+  return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase().trim());
+}
 
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -861,6 +904,8 @@ export class ClaudeSdkService {
         }),
         includePartialMessages: false,
       };
+      // Lane oom: route the SDK's child spawn through the score reset.
+      sdkOpts.spawnClaudeCodeProcess = createClaudeCodeChildSpawn(sdkOpts);
       return sdkOpts;
     }
 
@@ -871,7 +916,7 @@ export class ClaudeSdkService {
 
     const nativeAllowedTools = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task', 'NotebookEdit', 'Skill', 'TodoWrite'];
 
-    return {
+    const sdkOpts: Options = {
       cwd,
       model,
       ...(effort ? { effort } : {}),
@@ -894,6 +939,9 @@ export class ClaudeSdkService {
       }),
       includePartialMessages: false,
     };
+    // Lane oom: route the SDK's child spawn through the score reset.
+    sdkOpts.spawnClaudeCodeProcess = createClaudeCodeChildSpawn(sdkOpts);
+    return sdkOpts;
   }
 
   /**

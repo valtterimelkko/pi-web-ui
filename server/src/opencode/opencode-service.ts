@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import { planSpawnOwn, placementForSpawn } from '../placement/index.js';
 import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -1066,6 +1067,8 @@ export class OpenCodeService {
         }
       });
       child.on('error', () => { probe.cleanup(); resolve(false); });
+      // Lane oom: the models probe must not keep the server's -500.
+      applyChildOomScoreAdj(child, 'opencode-probe');
     });
   }
 

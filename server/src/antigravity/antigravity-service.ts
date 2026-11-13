@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import { planSpawnOwn, placementForSpawn } from '../placement/index.js';
 import type { NormalizedEvent, ChildCardProjection } from '@pi-web-ui/shared';
 import { AntigravitySessionStore } from './antigravity-session-store.js';
@@ -79,6 +80,7 @@ export function runAgy(args: string[], cwd: string, timeoutMs: number, stallTime
     const launch = planSpawnOwn(placementForSpawn(), [AGY_BINARY, ...args], env) ??
       { file: AGY_BINARY, args, env, group: '', cleanup: () => {} };
     const proc = spawn(launch.file, launch.args, { cwd, env: launch.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    applyChildOomScoreAdj(proc, 'antigravity-probe');
 
     let stdout = '';
     let stderr = '';

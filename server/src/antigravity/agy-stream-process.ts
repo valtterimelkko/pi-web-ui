@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import { createLogger } from '../logging/logger.js';
 import { applySessionIdentityEnv, type SessionEnvIdentity } from '../session-env-identity.js';
 import { planSpawnForSession, planSpawnOwn, placementForSpawn } from '../placement/index.js';
@@ -159,6 +160,8 @@ export class AgyStreamProcess {
       env: launch.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    // Lane oom: the persistent agy child must not keep the server's -500.
+    applyChildOomScoreAdj(child, 'antigravity-stream');
     this.child = child;
     this.exited = false;
     this.terminating = false;
