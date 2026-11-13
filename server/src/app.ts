@@ -3,6 +3,7 @@ import helmet from 'helmet';
 import cors from 'cors';
 import { config } from './config.js';
 import { apiLimiter } from './security/rate-limit.js';
+import { proxyKeyMiddleware, type ProxyKeyGuard } from './security/proxy-key.js';
 import { createLogger } from './logging/logger.js';
 import { compressionMiddleware } from './middleware/compression.js';
 import authRoutes from './routes/auth.js';
@@ -47,11 +48,27 @@ export interface AppWithWs {
   getWebSocketStats: () => { connectedClients: number } | null;
 }
 
-export function createApp(notifications?: NotificationsWebMount): express.Application {
+export interface CreateAppOptions {
+  /** Transport gate for non-loopback peers (shared proxy key). Defaults to the
+   *  startup-resolved shared guard; tests inject a resolver. */
+  proxyKeyGuard?: ProxyKeyGuard;
+}
+
+export function createApp(
+  notifications?: NotificationsWebMount,
+  options?: CreateAppOptions,
+): express.Application {
   const app = express();
 
   // Trust proxy (required for rate limiting behind reverse proxy)
   app.set('trust proxy', 1);
+
+  // Outermost transport gate (security review 2026-11-12, finding 7): a
+  // non-loopback socket peer must present the shared proxy key before ANY
+  // route — API, static, SPA fallback, login — runs. Loopback is unaffected.
+  // The peer is req.socket.remoteAddress, never req.ip or X-Forwarded-* (those
+  // stay spoofable only to a peer that already passed).
+  app.use(proxyKeyMiddleware(options?.proxyKeyGuard));
 
   // Security middleware
   app.use(helmet());

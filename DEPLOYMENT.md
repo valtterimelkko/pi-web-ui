@@ -55,12 +55,40 @@ Why Caddy is a good fit:
 
 Nginx is also perfectly viable, and an example is included below.
 
+## Shared proxy key (non-loopback gate)
+
+The server binds `0.0.0.0`. Two kinds of peer are legitimate: loopback clients
+on the same host, and the reverse proxy in front. When the proxy does **not**
+connect from loopback — e.g. Caddy inside a Docker container on the bridge
+network — any other container can bypass it and talk to the port directly,
+setting `X-Forwarded-For` freely (which is also what the login throttle keys
+on). The shared proxy key closes that: every HTTP route and every WebSocket
+upgrade refuses a non-loopback socket peer with `403` unless it presents
+`x-pwu-proxy-key` equal to the key. Loopback peers (curl on the host, health
+checks, dev tooling) need nothing.
+
+Setup:
+
+1. Generate a random key into an owner-readable file outside the repo:
+   `openssl rand -hex 32 > /root/.pi-web-ui/proxy-key && chmod 600 /root/.pi-web-ui/proxy-key`
+2. Set `PI_WEB_UI_PROXY_KEY_FILE` to that path (e.g. in `.env.production`).
+3. Configure the proxy to send the same value on **every** forwarded request,
+   including WebSocket upgrades (Caddy: `header_up x-pwu-proxy-key <key>` or
+   `header_up x-pwu-proxy-key {env.PWU_PROXY_KEY}` inside each `reverse_proxy`
+   block).
+
+Unset, unreadable or empty key files **fail closed**: non-loopback is refused
+while loopback keeps working, with one startup warning line in the log. A
+proxy that proxies from loopback (e.g. `reverse_proxy 127.0.0.1:3456` on the
+same host) needs no key.
+
 ## Production Checklist
 
 - [ ] Use Node.js 22.19+ (Pi SDK 0.84.x requirement)
 - [ ] Set strong `JWT_SECRET` and `CSRF_SECRET`
 - [ ] Set a real `AUTH_PASSWORD` / hash
 - [ ] Set `ALLOWED_ORIGINS` correctly
+- [ ] If the reverse proxy connects from a non-loopback address (e.g. Caddy in Docker): set `PI_WEB_UI_PROXY_KEY_FILE` and configure the proxy to send `x-pwu-proxy-key` on every request, WebSocket upgrades included
 - [ ] Enable HTTPS / WSS
 - [ ] Configure systemd or equivalent restart policy
 - [ ] Confirm Pi CLI / SDK availability
@@ -87,6 +115,7 @@ Nginx is also perfectly viable, and an example is included below.
 | `CSRF_SECRET` | strong random secret |
 | `AUTH_PASSWORD` | password or bcrypt hash |
 | `ALLOWED_ORIGINS` | frontend origins allowed to connect |
+| `PI_WEB_UI_PROXY_KEY_FILE` | path to the shared proxy-key file; required when the fronting proxy connects from a non-loopback address (see "Shared proxy key" above) |
 
 ### Rate limiting and session hygiene
 
@@ -369,6 +398,8 @@ Environment=PI_IDLE_TIMEOUT=1800000
 Environment=OPENCODE_ENABLED=true
 Environment=OPENCODE_SERVER_HOST=127.0.0.1
 Environment=OPENCODE_SERVER_PORT=4097
+# Required when the fronting proxy is not on loopback (e.g. Caddy in Docker):
+#Environment=PI_WEB_UI_PROXY_KEY_FILE=/root/.pi-web-ui/proxy-key
 ExecStart=/usr/bin/node server/dist/index.js
 Restart=on-failure
 RestartSec=10
@@ -419,6 +450,13 @@ pi.example.com {
     encode zstd gzip
 
     handle /ws* {
+        # When Caddy reaches Pi Web UI from a non-loopback address (e.g. from a
+        # container on the Docker bridge rather than 127.0.0.1), it must present
+        # the shared proxy key on every request — add inside EACH reverse_proxy
+        # block and align with PI_WEB_UI_PROXY_KEY_FILE:
+        # reverse_proxy 127.0.0.1:3456 {
+        #     header_up x-pwu-proxy-key {env.PWU_PROXY_KEY}
+        # }
         reverse_proxy 127.0.0.1:3456
     }
 

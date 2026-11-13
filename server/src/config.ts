@@ -638,6 +638,11 @@ export interface ServerConfig {
   observabilityMemoryJournalSessions: number;
   telegramBotToken?: string;
   telegramChatId?: string;
+  /** File path holding the shared key a fronting reverse proxy (Caddy) must
+   *  present on every non-loopback HTTP request and WebSocket upgrade. The
+   *  file is read once at startup by the proxy-key guard; the key itself is
+   *  never stored here, never logged. Unset/unreadable/empty fails closed. */
+  proxyKeyFile?: string;
 }
 
 /**
@@ -890,4 +895,5 @@ export const config: ServerConfig = {
   observabilityMemoryJournalSessions: memoryJournalOptions.heartbeatSessions,
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || undefined,
   telegramChatId: process.env.TELEGRAM_CHAT_ID || undefined,
+  proxyKeyFile: process.env.PI_WEB_UI_PROXY_KEY_FILE || undefined,
 };

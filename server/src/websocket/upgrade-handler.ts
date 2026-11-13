@@ -18,6 +18,7 @@ import type { IncomingMessage } from 'http';
 import type { Duplex } from 'node:stream';
 import type WebSocket from 'ws';
 import { decideWsUpgrade, type WsUpgradeDecision } from '../security/websocket.js';
+import { proxyKeyUpgradeAllowed, type ProxyKeyGuard } from '../security/proxy-key.js';
 import { handleSessionWebSocket } from './session-websocket.js';
 import { handleTerminalWebSocket } from '../terminal/terminal-websocket.js';
 import { createLogger } from '../logging/logger.js';
@@ -47,6 +48,8 @@ export interface UpgradeDeps {
     onSession?: SessionHandler;
     onTerminal?: TerminalHandler;
   };
+  /** Optional proxy-key guard override (tests inject a non-loopback resolver). */
+  proxyKeyGuard?: ProxyKeyGuard;
   verbose?: boolean;
 }
 
@@ -74,6 +77,12 @@ export function handleWebSocketUpgrade(
   head: Buffer,
   deps: UpgradeDeps,
 ): void {
+  // Outermost transport gate (security review 2026-11-12, finding 7): before
+  // any handshake is accepted, a non-loopback socket peer must present the
+  // shared proxy key. Refusal writes a 403 and destroys the socket — before
+  // URL parsing, before decideWsUpgrade, before any handleUpgrade.
+  if (!proxyKeyUpgradeAllowed(req, socket, deps.proxyKeyGuard)) return;
+
   let url: URL;
   try {
     // Routing depends only on the request target; never trust Host as the URL
