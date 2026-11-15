@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { INTERNAL_API_CONTRACT_VERSION } from '../../../src/internal-api/types.js';
-import type { ClientContractSnapshot } from '../../../../scripts/generate-client-snapshot.js';
+import type { ClientContractSnapshot } from '../../../../scripts/generate-client-snapshot.mts';
 import {
   BASELINE_SHAPE_SHA256,
   BASELINE_TYPES,

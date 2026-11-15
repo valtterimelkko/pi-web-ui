@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ClientContractSnapshot } from '../../../../scripts/generate-client-snapshot.js';
+import type { ClientContractSnapshot } from '../../../../scripts/generate-client-snapshot.mts';
 
 /**
  * Pure guard logic for the C6 contract stability window (orchestration-scaling

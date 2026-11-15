@@ -81,9 +81,14 @@ documented exit-code table (the `pi-orch` README). Output is JSON with
 **Contract drift guard.** This repo generates a committed snapshot of the
 routes, request schemas, response types, error codes and contract version the
 client consumes: `docs/contract/internal-api-client-snapshot.json`, produced
-deterministically by `npx tsx scripts/generate-client-snapshot.ts` from the
+deterministically by `npx tsx scripts/generate-client-snapshot.mts` from the
 server's zod schemas (`session-validation.ts`, `dispatch-preflight.ts`) and
-internal-api types. `server/tests/unit/internal-api/client-snapshot-drift.test.ts`
+internal-api types (`--check` verifies without writing; `--out <path>` writes
+elsewhere). The entry must stay `.mts`: the root `package.json` declares no
+`"type"`, so a `.ts` entry loads as CommonJS under tsx and the ESM-only Pi SDK
+root export fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`
+(`client-snapshot-generator-entry.test.ts` guards it).
+`server/tests/unit/internal-api/client-snapshot-drift.test.ts`
 regenerates the snapshot and fails CI when a server schema or type changes
 without regenerating it. The client's own tests validate its builders and
 parsers against that snapshot (read from the main checkout by default,

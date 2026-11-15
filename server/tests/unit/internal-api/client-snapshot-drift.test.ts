@@ -6,7 +6,7 @@ import { INTERNAL_API_CONTRACT_VERSION } from '../../../src/internal-api/types.j
 import {
   generateSnapshot,
   type ClientContractSnapshot,
-} from '../../../../scripts/generate-client-snapshot.js';
+} from '../../../../scripts/generate-client-snapshot.mts';
 
 /**
  * C1 (orchestration-scaling plan): the thin parent client (`pi-orch`, a sibling
@@ -36,7 +36,7 @@ describe('Internal API client contract snapshot', () => {
     const generated = generateSnapshot({ repoRoot });
     expect(generated).toEqual(committed);
     // A failure above means a server schema/type changed without regenerating.
-    // Fix: `npx tsx scripts/generate-client-snapshot.ts` from the repo root,
+    // Fix: `npx tsx scripts/generate-client-snapshot.mts` from the repo root,
     // then review the diff and update the pi-orch client if the change is
     // client-visible.
   });
@@ -63,7 +63,7 @@ describe('Internal API client contract snapshot', () => {
       expect(source, `route ${verb} declares unknown sourceFile ${route.sourceFile}`).toBeTruthy();
       expect(
         source.includes(route.handler),
-        `route ${verb} (${route.method} ${route.path}) anchors to handler ${route.handler}, which no longer exists in ${route.sourceFile} — update the route table in scripts/generate-client-snapshot.ts`,
+        `route ${verb} (${route.method} ${route.path}) anchors to handler ${route.handler}, which no longer exists in ${route.sourceFile} — update the route table in scripts/generate-client-snapshot.mts`,
       ).toBe(true);
     }
   });

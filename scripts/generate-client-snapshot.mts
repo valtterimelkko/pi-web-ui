@@ -15,8 +15,16 @@
  *
  * Determinism contract: the output contains NO timestamps, git metadata or any
  * other run-varying value — regeneration is reproducible byte-for-byte. Run:
- *   npx tsx scripts/generate-client-snapshot.ts
+ *   npx tsx scripts/generate-client-snapshot.mts            (write the file)
+ *   npx tsx scripts/generate-client-snapshot.mts --check     (verify, no write)
+ *   npx tsx scripts/generate-client-snapshot.mts --out <path> (write elsewhere)
  * and commit `docs/contract/internal-api-client-snapshot.json`.
+ *
+ * This entry MUST keep the `.mts` extension: the repo root `package.json`
+ * declares no `"type"`, so a `.ts` entry loads as CommonJS under tsx and the
+ * ESM-only `@earendil-works/pi-coding-agent` root export dies with
+ * ERR_PACKAGE_PATH_NOT_EXPORTED. `client-snapshot-generator-entry.test.ts`
+ * runs this file standalone to keep both defects fixed.
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -406,15 +414,38 @@ export function generateSnapshot(options: GenerateOptions = {}): ClientContractS
   };
 }
 
-function main(): void {
+function main(argv: string[] = process.argv.slice(2)): void {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const committed = resolve(repoRoot, 'docs/contract/internal-api-client-snapshot.json');
+
+  const outIndex = argv.indexOf('--out');
+  const outPath = outIndex >= 0 ? argv[outIndex + 1] : undefined;
+  if (outIndex >= 0 && !outPath) {
+    throw new Error('generate-client-snapshot: --out requires a path');
+  }
+  const check = argv.includes('--check');
+  const target = check ? committed : resolve(outPath ?? committed);
+
   const snapshot = generateSnapshot({ repoRoot });
-  const target = resolve(repoRoot, 'docs/contract/internal-api-client-snapshot.json');
+  const serialised = `${JSON.stringify(snapshot, null, 2)}\n`;
+  const summary = `contract ${snapshot.contractVersion}, ${Object.keys(snapshot.routes).length} routes, ${Object.keys(snapshot.types).length} types`;
+
+  if (check) {
+    // Verify-only: the CI-equivalent of the drift test, usable on a checkout
+    // where the vitest loader is unavailable (`--check` never writes).
+    const current = readFileSync(committed, 'utf8');
+    if (current !== serialised) {
+      console.error(`snapshot ${committed} does NOT match server source (${summary}) — regenerate and review the diff`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`snapshot ${committed} matches server source (${summary})`);
+    return;
+  }
+
   mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, `${JSON.stringify(snapshot, null, 2)}\n`);
-  console.log(
-    `wrote ${target} (contract ${snapshot.contractVersion}, ${Object.keys(snapshot.routes).length} routes, ${Object.keys(snapshot.types).length} types)`,
-  );
+  writeFileSync(target, serialised);
+  console.log(`wrote ${target} (${summary})`);
 }
 
 const isMain = process.argv[1] === fileURLToPath(import.meta.url);
