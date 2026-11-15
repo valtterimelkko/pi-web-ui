@@ -15,6 +15,7 @@ on:
       - '!SECURITY.md'
       - '!docs/INTERNAL-API-CONTRACT.md'
       - '!docs/INTERNAL-API.md'
+      - '!docs/INTERNAL-API-ORCHESTRATION.md'
       - '!docs/LIVE-VALIDATION.md'
       - '!docs/LONG-HORIZON-VALIDATION.md'
       - '!docs/OBSERVABILITY.md'
