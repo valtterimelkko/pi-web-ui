@@ -281,7 +281,9 @@ describe('devin goal function (contract 1.68.0)', () => {
     await routes.handleSessionGoalControl(jsonReq('POST', '/api/v1/sessions/session-1/goal', { action: 'resume' }), resume, 'session-1');
     expect(resume.statusCode, resume.body).toBe(200);
     expect(JSON.parse(resume.body).goal).toMatchObject({ status: 'running', autoContinue: true });
-    expect(devinService.sendPrompt).toHaveBeenCalledTimes(1);
+    // The continuation is sent at once, or — when the session is still settling from the start turn (a slow CI
+    // runner, 15 Nov 2026) — owed and sent by the next 250 ms sweep (pendingContinuation). Either way exactly one.
+    await vi.waitFor(() => expect(devinService.sendPrompt).toHaveBeenCalledTimes(1), { timeout: 5_000 });
     expect(devinService.sendPrompt.mock.calls[0][1] as string).toContain('Ship it');
 
     const clear = mockRes();
