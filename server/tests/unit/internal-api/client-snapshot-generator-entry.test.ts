@@ -57,6 +57,22 @@ describe('generate-client-snapshot entry module format', () => {
     expect(stderr).not.toMatch(/No "exports" main defined/);
   }, 240_000);
 
+  it('runs end to end and the committed snapshot matches what it generates (owner fix, 15 Nov 2026)', () => {
+    // --check exits 0 only when the generated snapshot equals the committed file. Before the fix the entry stopped on
+    // a never-exported `retentionSchema` (exit 1) and the committed snapshot described retention as opaque.
+    const result = spawnSync('npx', ['tsx', ENTRY, '--check'], {
+      cwd: REPO_ROOT,
+      env: { ...process.env, NODE_ENV: 'test' },
+      encoding: 'utf8',
+      timeout: 180_000,
+    });
+    expect(result.stderr ?? '').not.toMatch(/does not provide an export named/);
+    expect(result.status, result.stderr ?? '').toBe(0);
+    const committed = JSON.parse(readFileSync(path.join(REPO_ROOT, 'docs/contract/internal-api-client-snapshot.json'), 'utf8'));
+    expect(committed.zodSchemas.retention).toMatchObject({ type: 'object', strict: true });
+    expect(committed.zodSchemas.retention.opaque).toBeUndefined();
+  }, 240_000);
+
   it('is named .mts by every place that documents or imports the entry', () => {
     // A rename back to .ts reintroduces defect 1 silently, because the .ts form
     // only fails in a subprocess — the vitest loader never sees it.

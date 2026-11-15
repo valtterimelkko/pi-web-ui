@@ -46,7 +46,8 @@ const commandCodeAttestationSchema = z.unknown();
 const invocationRoleSchema = z.unknown();
 
 const ttlSecondsSchema = z.number().int().finite().min(1).max(7 * 24 * 60 * 60);
-const retentionSchema = z.object({
+/** Exported for the client-snapshot generator (scripts/generate-client-snapshot.mts); never exported before 15 Nov 2026. */
+export const retentionSchema = z.object({
   mode: z.enum(['durable', 'resident']),
   ttlSeconds: ttlSecondsSchema.optional(),
   ownerId: z.string().min(1).max(200),

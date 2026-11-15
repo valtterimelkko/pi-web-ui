@@ -207,6 +207,14 @@ const DEVIN_WL_1_69_0_ROW: StabilityExceptionRow = {
  *  like the retroactive 1.58.5 row this records the semantic change — it
  *  grants nothing: the snapshot fingerprints identically to 1.69.0 apart
  *  from the version string. */
+/** The live table's fourteenth row: the owner's 15 Nov 2026 snapshot correction (retention schema exported; no wire change). */
+const SNAPSHOT_RETENTION_1_69_1_ROW: StabilityExceptionRow = {
+  date: '2026-11-15',
+  decision: 'owner, 15 Nov 2026 ("Yes, do the fix now.", Claude Code RC session claude:2198afb5; F-SNAP follow-up of the permanent-roles programme)',
+  what: "1.69.1 snapshot correction (no wire change): the client snapshot's `zodSchemas.retention` described the retention body as `{type: \"unknown\", opaque: true}` since the generator was created, because `retentionSchema` in `server/src/internal-api/session-validation.ts` was never exported and the vitest loader silently yielded undefined. The schema is now exported and the snapshot regenerated with its real shape (`mode`, `ttlSeconds`, `ownerId`, `label`; strict). Routes, types, error codes and behaviour unchanged; the shape fingerprint is re-based. pi-orch does not read `zodSchemas.retention`.",
+  version: '1.69.1',
+};
+
 const DEVIN_D5_1_69_1_ROW: StabilityExceptionRow = {
   date: '2026-11-08',
   decision: 'DEVIN-PARITY-PLAN lane D5 (owner plan of record; parent-verified live bug the same day)',
@@ -249,8 +257,8 @@ describe('contract stability window (C6)', () => {
       expect(parsed?.openEnded).toBe(true);
     });
 
-    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row, the wave K 1.60.0 row, the W0-c 1.61.0 row, the W2 1.62.0 row, the step 1i.2 B 1.63.0 row, the step 1i.3 1.64.0 row, the step 1k 1.65.0 row, the ch-tg 1.66.0 row, the devin-parity A1 1.67.0 row the devin-parity C1 1.68.0 row, the devin worklog 1.69.0 row and the devin D5 1.69.1 row', () => {
-      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW, W0C_1_61_0_ROW, W2_1_62_0_ROW, STEP1I2B_1_63_0_ROW, STEP1I3_1_64_0_ROW, STEP1K_1_65_0_ROW, CH_TG_1_66_0_ROW, DEVIN_A1_1_67_0_ROW, DEVIN_C1_1_68_0_ROW, DEVIN_WL_1_69_0_ROW, DEVIN_D5_1_69_1_ROW]);
+    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row, the wave K 1.60.0 row, the W0-c 1.61.0 row, the W2 1.62.0 row, the step 1i.2 B 1.63.0 row, the step 1i.3 1.64.0 row, the step 1k 1.65.0 row, the ch-tg 1.66.0 row, the devin-parity A1 1.67.0 row the devin-parity C1 1.68.0 row, the devin worklog 1.69.0 row, the devin D5 1.69.1 row and the 1.69.1 snapshot-correction row', () => {
+      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW, W0C_1_61_0_ROW, W2_1_62_0_ROW, STEP1I2B_1_63_0_ROW, STEP1I3_1_64_0_ROW, STEP1K_1_65_0_ROW, CH_TG_1_66_0_ROW, DEVIN_A1_1_67_0_ROW, DEVIN_C1_1_68_0_ROW, DEVIN_WL_1_69_0_ROW, DEVIN_D5_1_69_1_ROW, SNAPSHOT_RETENTION_1_69_1_ROW]);
       const withRows = parseStabilityWindow(
         [
           '### Stability window',
