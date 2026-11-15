@@ -299,7 +299,11 @@ describe('createSessionRoutes orchestration endpoints', () => {
       watchDir: path.join(tempDir, 'watches'),
       devinSessionDir: path.join(tempDir, 'devin-sessions'),
       runReceiptManager,
-      admissionController,
+      // The default controller sizes itself from availableParallelism(), so a
+      // 1-2 CPU host or a CPUQuota-capped cgroup leaves one execution slot and
+      // concurrent batch prompts are refused. Pin capacity: these tests are
+      // about routing/correlation, not host sizing.
+      admissionController: admissionController ?? new AdmissionController({ maxActiveTurns: 8 }),
       blockedPiProviders,
       commandCodeService,
     });

@@ -14,6 +14,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createSessionRoutes } from '../../../../src/internal-api/routes/sessions.js';
+import { AdmissionController } from '../../../../src/internal-api/admission-controller.js';
 import { RunReceiptManager } from '../../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../../src/internal-api/run-receipts/run-receipt-store.js';
 import { DEVIN_GOAL_SENTINEL } from '../../../../src/internal-api/goal/devin-goal.js';
@@ -173,6 +174,10 @@ describe('devin goal function (contract 1.68.0)', () => {
       claudeProjectsDir: path.join(dir, '.claude', 'projects'),
       pinExpiryIntervalMs: 60_000,
       runReceiptManager: manager,
+      // Default capacity is availableParallelism()-derived: on a 1-2 CPU host
+      // (or CPUQuota-capped cgroup) a held start turn plus the resume
+      // continuation exceed it and the resume is refused (429). Pin capacity.
+      admissionController: new AdmissionController({ maxActiveTurns: 8 }),
       onBrowserMessage: (message) => browserMessages.push(message),
     });
   });
