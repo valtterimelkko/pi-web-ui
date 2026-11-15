@@ -126,6 +126,7 @@ same host) needs no key.
 | `SESSION_AUTO_ARCHIVE_DAYS` | `30` | auto-archive sessions with no activity for this many days (reversible; `0` disables) |
 | `SESSION_RETENTION_MIN_DWELL_DAYS` | `7` | minimum dwell in the archived state before the 90-day retention delete is eligible |
 | `SESSION_CLEANUP_DRY_RUN` | `true` | dry-run: cleanup only logs what it would unpin/archive/delete; set `false` to act |
+| `SESSION_DELETE_REQUIRE_ARCHIVE_ROOT` | unset | archive delete guard: set to the jev archive root and no runtime session file is deleted until that archive holds it (a blank value silently disables the guard — unset the variable or name the root) |
 
 Background and incident evidence: [`docs/plans/PI-WEB-UI-RATE-LIMIT-AND-SESSION-HYGIENE-FIXES.md`](./docs/plans/PI-WEB-UI-RATE-LIMIT-AND-SESSION-HYGIENE-FIXES.md) (resolved 2026-08-21, `f092fc2`).
 

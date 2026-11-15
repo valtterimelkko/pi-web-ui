@@ -108,4 +108,6 @@ window) until a follow-up removes the legacy projection.
 `session-cleanup.ts` derives the pinned/archived sets from the v2 map (each
 record's `legacyKey` is the path used for registry/fs lookups), preserving the
 existing semantics: auto-unpin a pinned session after **24h** inactivity, and
-auto-delete an archived session after **90d**.
+auto-delete an archived session after **90d**. When
+`SESSION_DELETE_REQUIRE_ARCHIVE_ROOT` names the jev archive root, no runtime
+file is deleted until that archive holds it.

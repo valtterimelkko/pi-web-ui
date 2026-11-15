@@ -149,7 +149,7 @@ Canonical feature doc: [`docs/VOICE-MODE-INTENT.md`](./VOICE-MODE-INTENT.md); **
 
 ### Registry / Persistence
 - `session-registry.ts` — Unified cross-runtime session index (`~/.pi-web-ui/session-registry.json`). Atomic tmp+rename writes. Entries may carry `origin` (`browser` | `internal-api` | `native-discovered`) — the provenance surfaced as `source` by the Internal API list.
-- `session-cleanup.ts` — Scheduled cleanup of archived/pinned sessions (hourly funnel: auto-unpin 24h, auto-archive 30d idle, retention-delete 90d+7d dwell).
+- `session-cleanup.ts` — Scheduled cleanup of archived/pinned sessions (hourly funnel: auto-unpin 24h, auto-archive 30d idle, retention-delete 90d+7d dwell); the archive delete guard (`SESSION_DELETE_REQUIRE_ARCHIVE_ROOT`) refuses to delete a runtime file the jev archive does not hold.
 - `pi/session-watcher.ts` — chokidar watcher on `~/.pi/agent/sessions`: auto-discovers ALL native pi CLI sessions (any cwd, any launcher) into the registry; tags unseen files `origin: native-discovered`.
 - `internal-api/native-sessions.ts` — bounded read-only scanners behind `GET /api/v1/sessions/native` for the direct-CLI stores the registry never sees (claude projects, cmdc CLI + native home, opencode storage, agy conversations).
 
