@@ -9,13 +9,18 @@ import {
 } from '../../../src/antigravity/agy-models.js';
 
 /**
- * Fixture: verbatim `agy models` output on agy 1.5.3 (2026-11-09).
+ * Fixture: `agy models` output on agy 1.5.3 (2026-11-09), plus the Gemini 4 Neon block
+ * (incl. -xhigh) read live on 2026-11-19.
  * The Claude/GPT group moved to Sonnet/Opus 5.5 sibling selectors — claude
  * models now carry a real level axis exactly like the gemini families;
  * gpt-oss-120b-medium stays axis-less. thinkingLevels must derive from
  * actual siblings, never assume a full low/medium/high ladder.
  */
 export const AGY_MODELS_FIXTURE = [
+  'gemini-4-neon-high\tGemini 4 Neon (High)',
+  'gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)',
+  'gemini-4-neon-medium\tGemini 4 Neon (Medium)',
+  'gemini-4-neon-low\tGemini 4 Neon (Low)',
   'gemini-4-argon-medium\tGemini 4 Argon (Medium)',
   'gemini-4-argon-high\tGemini 4 Argon (High)',
   'gemini-4-argon-low\tGemini 4 Argon (Low)',
@@ -37,9 +42,10 @@ const catalog = toCatalogEntries(models);
 describe('parseAgyModelsOutput', () => {
   it('parses <slug>\\t<Label> lines from the real 1.5.3 catalogue', () => {
     const parsed = parseAgyModelsOutput(AGY_MODELS_FIXTURE);
-    expect(parsed).toHaveLength(13);
-    expect(parsed[0]).toEqual({ slug: 'gemini-4-argon-medium', label: 'Gemini 4 Argon (Medium)' });
-    expect(parsed[12]).toEqual({ slug: 'gpt-oss-120b-medium', label: 'GPT-OSS 120B (Medium)' });
+    expect(parsed).toHaveLength(17);
+    expect(parsed[0]).toEqual({ slug: 'gemini-4-neon-high', label: 'Gemini 4 Neon (High)' });
+    expect(parsed[4]).toEqual({ slug: 'gemini-4-argon-medium', label: 'Gemini 4 Argon (Medium)' });
+    expect(parsed[16]).toEqual({ slug: 'gpt-oss-120b-medium', label: 'GPT-OSS 120B (Medium)' });
   });
 
   it('tolerates blank lines and label-only lines (older agy)', () => {
@@ -56,6 +62,21 @@ describe('deriveThinkingLevels (from actual siblings)', () => {
     expect(deriveThinkingLevels(models, 'gemini-3.8-flash-low')).toEqual(['low', 'medium', 'high']);
     expect(deriveThinkingLevels(models, 'claude-sonnet-5-5-medium')).toEqual(['low', 'medium', 'high']);
     expect(deriveThinkingLevels(models, 'claude-opus-5-5-high')).toEqual(['low', 'medium', 'high']);
+  });
+
+  it('xhigh joins the ladder as the top level (Gemini 4 Neon, agy 1.5.x)', () => {
+    const expected = ['low', 'medium', 'high', 'xhigh'];
+    for (const slug of ['gemini-4-neon-low', 'gemini-4-neon-medium', 'gemini-4-neon-high', 'gemini-4-neon-xhigh']) {
+      expect(deriveThinkingLevels(models, slug)).toEqual(expected);
+    }
+    // Argon has no xhigh sibling, so its ladder stays low/medium/high.
+    expect(deriveThinkingLevels(models, 'gemini-4-argon-high')).toEqual(['low', 'medium', 'high']);
+  });
+
+  it('resolves xhigh by sibling swap and keeps the pair validator coherent', () => {
+    expect(resolveModelSlug('gemini-4-neon-medium', 'xhigh', models)).toEqual({ ok: true, slug: 'gemini-4-neon-xhigh' });
+    expect(validateModelThinkingPair('gemini-4-neon-xhigh', 'xhigh', models)).toEqual({ ok: true });
+    expect(resolveModelSlug('gemini-4-argon-medium', 'xhigh', models).ok).toBe(false);
   });
 
   it('partial ladder when a middle sibling is absent (synthetic family)', () => {

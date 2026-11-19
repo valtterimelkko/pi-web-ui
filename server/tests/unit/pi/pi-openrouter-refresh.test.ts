@@ -159,6 +159,34 @@ describe('transformOpenRouterModel', () => {
   });
 });
 
+describe('Gemini 4 thinking levels (live-probed 2026-11-19)', () => {
+  const gem = (id: string): OpenRouterModelEntry => ({
+    id,
+    name: id,
+    context_length: 1_048_576,
+    architecture: { modality: 'text+image->text', input_modalities: ['text', 'image'], output_modalities: ['text'] },
+    pricing: { prompt: '0.000003', completion: '0.000015' },
+    supported_parameters: ['include_reasoning', 'reasoning', 'reasoning_effort', 'tools'],
+  });
+  const noOffMinimal = { off: null, minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null };
+
+  it('Neon and Hydrogen: reasoning is mandatory (no off/minimal) and xhigh is real', () => {
+    for (const id of ['google/gemini-4-neon', 'google/gemini-4-neon:batch', 'google/gemini-4-hydrogen', 'google/gemini-4-hydrogen:batch']) {
+      expect(transformOpenRouterModel(gem(id))?.thinkingLevelMap).toEqual({ ...noOffMinimal, xhigh: 'xhigh' });
+    }
+  });
+
+  it('Argon and Carbon: low/medium/high only', () => {
+    for (const id of ['google/gemini-4-argon', 'google/gemini-4-argon:batch', 'google/gemini-4-carbon']) {
+      expect(transformOpenRouterModel(gem(id))?.thinkingLevelMap).toEqual(noOffMinimal);
+    }
+  });
+
+  it('other models carry no map (SDK defaults apply)', () => {
+    expect(transformOpenRouterModel(gem('google/gemini-3.8-flash'))).not.toHaveProperty('thinkingLevelMap');
+  });
+});
+
 describe('transformOpenRouterCatalogue', () => {
   it('filters to chat models, dedups, sorts, and builds the provider config', () => {
     const config = transformOpenRouterCatalogue({

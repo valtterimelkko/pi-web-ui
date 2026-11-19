@@ -84,6 +84,8 @@ export interface PiModelDef {
   contextWindow: number;
   maxTokens: number;
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  /** Per-level provider values (null = level unsupported); omitted = SDK defaults. */
+  thinkingLevelMap?: Record<string, string | null>;
 }
 
 /** Provider block ready for ModelRuntime.registerProvider('openrouter', ...). */
@@ -165,6 +167,21 @@ function toCost(pricing: OpenRouterModelEntry['pricing']): PiModelDef['cost'] {
 }
 
 /**
+ * Gemini 4 thinking levels, live-probed on OpenRouter 2026-11-19: reasoning is
+ * mandatory (effort `none` is a 400) and `minimal` is only an alias of `low`,
+ * so off/minimal are unsupported (matches the Pi SDK's own Argon entry). Neon
+ * and Hydrogen also accept a real `xhigh` (more reasoning tokens; agy lists an
+ * -xhigh slug for exactly these two); Argon and Carbon stay low/medium/high.
+ * Without a map the server would advertise off/minimal and hide xhigh.
+ */
+export function deriveThinkingLevelMap(id: string): PiModelDef['thinkingLevelMap'] | undefined {
+  const match = /^google\/gemini-4-([a-z]+)(?::.+)?$/.exec(id);
+  if (!match) return undefined;
+  const xhigh = match[1] === 'neon' || match[1] === 'hydrogen' ? 'xhigh' : null;
+  return { off: null, minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh, max: null };
+}
+
+/**
  * Transform a single OpenRouter model entry into a Pi SDK model def.
  * Returns null when the entry is not a usable chat model (filtered out).
  */
@@ -192,6 +209,7 @@ export function transformOpenRouterModel(m: OpenRouterModelEntry): PiModelDef | 
     contextWindow,
     maxTokens,
     cost: toCost(m.pricing),
+    ...(deriveThinkingLevelMap(m.id) ? { thinkingLevelMap: deriveThinkingLevelMap(m.id) } : {}),
   };
 }
 

@@ -28,7 +28,9 @@ export interface ParsedAgyModel {
   label: string;
 }
 
-const LEVEL_ORDER = ['low', 'medium', 'high'] as const;
+// `xhigh` appeared with Gemini 4 Neon/Hydrogen (agy 1.5.x); only counts as a
+// level where an `-xhigh` sibling really exists (Argon and Claude stay low→high).
+const LEVEL_ORDER = ['low', 'medium', 'high', 'xhigh'] as const;
 type Level = (typeof LEVEL_ORDER)[number];
 
 function isLevel(value: string): value is Level {
