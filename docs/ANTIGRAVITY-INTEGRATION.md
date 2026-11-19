@@ -107,8 +107,10 @@ the next prompt respawns with `--conversation <last-known-id>` and retries.
   expose the slug).
 - **Thinking level = sibling slug swap** (`gemini-3.6-flash-low` →
   `…-high`), derived per model from actual catalogue siblings. Models without
-  a level axis (Claude, GPT-OSS) expose `thinkingLevels: []` and reject level
-  changes loudly. `--effort` is never passed (live-validated: it conflicts with
+  a level axis (gpt-oss-120b) expose `thinkingLevels: []` and reject level
+  changes loudly (Claude Opus/Sonnet 5.5 moved to real low/medium/high sibling
+  selectors, and Gemini 4 Neon/Hydrogen add a real `xhigh` sibling).
+  `--effort` is never passed (live-validated: it conflicts with
   baked-level slugs and is unsupported for non-Gemini families).
 - Model/thinking changes while a turn runs return 409 `SESSION_BUSY`; when
   idle, the warm process is dropped and the next turn respawns with the new
