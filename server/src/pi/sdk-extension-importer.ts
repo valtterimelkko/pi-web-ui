@@ -30,7 +30,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
  */
 
 /** The only SDK minor this module's alias map and override were validated against. */
-export const VALIDATED_SDK_VERSION = '1.5.2';
+export const VALIDATED_SDK_VERSION = '1.6.0';
 
 export class ExtensionImporterError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
