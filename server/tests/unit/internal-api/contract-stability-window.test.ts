@@ -222,6 +222,16 @@ const DEVIN_D5_1_69_1_ROW: StabilityExceptionRow = {
   version: '1.69.1',
 };
 
+/** The live table's fifteenth row (ANTIGRAVITY-POST-TURN-WORK-PLAN P1b lane C):
+ *  the owner's plan-approved additive minor bump naming the provider error
+ *  classes on Antigravity receipts and the failed turn's `agent_end`. */
+const AGY_POST_TURN_C_1_70_0_ROW: StabilityExceptionRow = {
+  date: '2026-11-22',
+  decision: 'ANTIGRAVITY-POST-TURN-WORK-PLAN P1b lane C (owner plan of record, 22 Nov 2026: execute the plan end to end)',
+  what: '1.70.0 (agy-post-turn lane C, provider error classes): two additive error codes name an Antigravity turn that failed because the provider refused it — `PROVIDER_QUOTA_EXHAUSTED` (429; the provider reported `RESOURCE_EXHAUSTED`, so retrying cannot help until the quota resets) and `PROVIDER_TRANSIENT` (503; the provider answered 500/502/503/504, so the same request can succeed after a backoff). A classified Antigravity failure now reaches the **run receipt** as `errorCode: "PROVIDER_QUOTA_EXHAUSTED"` / `"PROVIDER_TRANSIENT"` instead of the generic `RUNTIME_ERROR`; every other runtime and every unclassified failure keeps `RUNTIME_ERROR`. The failed turn\'s broker `agent_end` carries additive `errorClass` (`"quota"` / `"transient"` / `"other"`) and, only when the provider text states one, `resetAt` (ISO 8601). No new routes, fields on REST payloads or defaults; additive error-code values and additive broker-event keys only.',
+  version: '1.70.0',
+};
+
 const CH_TG_1_66_0_ROW: StabilityExceptionRow = {
   date: '2026-10-19',
   decision: 'CHANNEL plan (owner plan of record; design `CHANNEL.md` §7, lane ch-tg)',
@@ -257,8 +267,8 @@ describe('contract stability window (C6)', () => {
       expect(parsed?.openEnded).toBe(true);
     });
 
-    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row, the wave K 1.60.0 row, the W0-c 1.61.0 row, the W2 1.62.0 row, the step 1i.2 B 1.63.0 row, the step 1i.3 1.64.0 row, the step 1k 1.65.0 row, the ch-tg 1.66.0 row, the devin-parity A1 1.67.0 row the devin-parity C1 1.68.0 row, the devin worklog 1.69.0 row, the devin D5 1.69.1 row and the 1.69.1 snapshot-correction row', () => {
-      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW, W0C_1_61_0_ROW, W2_1_62_0_ROW, STEP1I2B_1_63_0_ROW, STEP1I3_1_64_0_ROW, STEP1K_1_65_0_ROW, CH_TG_1_66_0_ROW, DEVIN_A1_1_67_0_ROW, DEVIN_C1_1_68_0_ROW, DEVIN_WL_1_69_0_ROW, DEVIN_D5_1_69_1_ROW, SNAPSHOT_RETENTION_1_69_1_ROW]);
+    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row, the wave K 1.60.0 row, the W0-c 1.61.0 row, the W2 1.62.0 row, the step 1i.2 B 1.63.0 row, the step 1i.3 1.64.0 row, the step 1k 1.65.0 row, the ch-tg 1.66.0 row, the devin-parity A1 1.67.0 row the devin-parity C1 1.68.0 row, the devin worklog 1.69.0 row, the devin D5 1.69.1 row, the 1.69.1 snapshot-correction row and the agy-post-turn lane C 1.70.0 row', () => {
+      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW, W0C_1_61_0_ROW, W2_1_62_0_ROW, STEP1I2B_1_63_0_ROW, STEP1I3_1_64_0_ROW, STEP1K_1_65_0_ROW, CH_TG_1_66_0_ROW, DEVIN_A1_1_67_0_ROW, DEVIN_C1_1_68_0_ROW, DEVIN_WL_1_69_0_ROW, DEVIN_D5_1_69_1_ROW, SNAPSHOT_RETENTION_1_69_1_ROW, AGY_POST_TURN_C_1_70_0_ROW]);
       const withRows = parseStabilityWindow(
         [
           '### Stability window',
@@ -277,12 +287,12 @@ describe('contract stability window (C6)', () => {
   });
 
   describe('version guard', () => {
-    it('accepts the live contract version now that the 1.69.0 exception row names it (the 1.69.1 patch rides the same major.minor)', () => {
+    it('accepts the live contract version now that the 1.70.0 exception row names it', () => {
       expect(parsed).not.toBeNull();
       const verdict = guardContractVersion(INTERNAL_API_CONTRACT_VERSION, parsed!.exceptions);
       expect(verdict.problems).toEqual([]);
       expect(verdict.ok).toBe(true);
-      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.69');
+      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.70');
     });
 
     it('refuses the live contract version when the exception row is absent (the window rule still bites)', () => {

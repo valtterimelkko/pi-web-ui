@@ -60,7 +60,11 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * bump fingerprints identically apart from the version string. Re-based again
  * at **1.69.1** on 2026-11-15 (owner exception row, "Yes, do the fix now.") — a snapshot correction, not a
  * wire change: `zodSchemas.retention` now carries the real retention schema (it read as opaque because
- * `retentionSchema` was never exported). The
+ * `retentionSchema` was never exported). Re-based again at **1.70.0**
+ * (2026-11-22, ANTIGRAVITY-POST-TURN-WORK-PLAN P1b lane C) under its own
+ * owner exception row — the additive `PROVIDER_QUOTA_EXHAUSTED` /
+ * `PROVIDER_TRANSIENT` error codes (the failed agy turn's `errorClass` /
+ * `resetAt` ride the broker `agent_end`, outside the snapshot's shapes). The
  * ENFORCED fingerprint is
  * the SHA-256 of the snapshot's canonical shape: the parsed snapshot with the
  * top-level `contractVersion` field removed, serialised with recursively
@@ -68,7 +72,7 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * still match). The full-file hash is informational (kept at the 1.58.0
  * opening version for the record).
  */
-export const BASELINE_SHAPE_SHA256 = 'a3167c0b5e23e2be9a0da6252cf4937417f0a39d6aff515a98173290ae70891d';
+export const BASELINE_SHAPE_SHA256 = '84b929e432476753ff96987bcc0f1cf3eade75067044d8b6a45683b4dd2ba71d';
 export const BASELINE_FULL_SHA256 = 'fab83d8b2c237d0f8d43733dbeff60fb45c2ee690cfe7ca2b1cc044da4dc5fec';
 
 /** Sorted route keys of the snapshot at 1.58.0 (the window's route baseline). */

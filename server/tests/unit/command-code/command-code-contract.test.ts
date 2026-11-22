@@ -31,6 +31,9 @@ describe('Command Code Internal API boundary', () => {
     // function (antigravity parity) + servedModel on devin receipts.
     // 1.69.1: devin ACP-boundary behaviour fix (lane D5, 2026-11-08) — a patch
     // bump over 1.69.0; no shape change.
-    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.69.1');
+    // 1.70.0: agy-post-turn lane C (2026-11-22) — PROVIDER_QUOTA_EXHAUSTED /
+    // PROVIDER_TRANSIENT on the Antigravity run receipt plus additive
+    // errorClass/resetAt on the failed turn's agent_end.
+    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.70.0');
   });
 });
