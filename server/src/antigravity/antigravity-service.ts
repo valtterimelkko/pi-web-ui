@@ -548,6 +548,11 @@ export class AntigravityService {
           timeoutMs: this.promptTimeoutMs,
           stallTimeoutMs: this.stallTimeoutMs,
           toolStallTimeoutMs: this.toolStallTimeoutMs,
+          // Lane B (2026-11-22): agy holds the stream turn open in silence while
+          // its own background task runs, so the stream stall clock must not
+          // SIGTERM a turn whose silence the service can explain. The closure
+          // reads live tracking; the hard turn timer is untouched.
+          hasPendingBackgroundWork: () => this.hasRunningBackgroundTasks(sessionId),
           idleTimeoutMs: this.idleTimeoutMs,
           onEvent: (parsed) => {
             // Contract 1.64.0 (census bug 18): agy reports the conversation id
@@ -1017,6 +1022,36 @@ export class AntigravityService {
     const meta = this.sessionMeta.get(sessionId);
     if (!meta) return [];
     return [...meta.backgroundTasks.values()].map((c) => ({ ...c }));
+  }
+
+  /**
+   * Lane B (2026-11-22): positive evidence that this session still has work we
+   * know about — a background task that is RUNNING and still inside the watch
+   * ceiling.
+   *
+   * agy 1.5.14 demotes a long `run_command` to a background task, answers
+   * STARTED and then emits nothing until that task finishes (live-probed: a
+   * 33-minute task held the stream turn open in silence). Callers use this to
+   * tell that silence apart from a stall. It is deliberately strict:
+   *   - only `status === 'running'` counts (a completed/cancelled/failed task
+   *     never holds a turn open);
+   *   - a task past `backgroundWatchMaxMs` no longer counts, because the
+   *     completion watcher stops tracking it there — so a stale banner cannot
+   *     keep a turn alive for ever;
+   *   - an unknown session is false.
+   * The background watch ceiling, the hard turn timer and abort/delete still end
+   * the turn; this only answers "is the silence explained?".
+   */
+  hasRunningBackgroundTasks(sessionId: string): boolean {
+    const meta = this.sessionMeta.get(sessionId);
+    if (!meta) return false;
+    const now = Date.now();
+    for (const child of meta.backgroundTasks.values()) {
+      if (child.status !== 'running') continue;
+      if (child.startedAt !== undefined && now - child.startedAt > this.backgroundWatchMaxMs) continue;
+      return true;
+    }
+    return false;
   }
 
   /** Poll the on-disk agy message receipts for every running background task

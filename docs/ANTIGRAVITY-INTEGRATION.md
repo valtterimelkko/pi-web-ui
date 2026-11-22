@@ -292,6 +292,22 @@ Watchdogs (stream mode):
 - **Abort**: SIGTERM, consume agy's closing `result`, escalate to SIGKILL after
   a 5 s grace window. Reason comes from what WE sent (agy reports the same
   "timeout waiting for response" string for signals and print-timeout expiry).
+- **Known background work** (2026-11-22): agy 1.5.14 demotes a long
+  `run_command` to a background task, reports the task id, answers STARTED and
+  then emits **nothing at all** until that task finishes — live-probed holds of
+  90 s, 60 s and 33 min. That silence means "still working", not "hung", so
+  while `AntigravityService.hasRunningBackgroundTasks(sessionId)` is true (a
+  tracked task with status `running`, still inside
+  `antigravityBackgroundWatchMaxMs`) the stream stall clock **re-arms instead of
+  SIGTERMing**, and the Internal API run watchdog's 15-minute idle rule defers
+  instead of terminalising the run `TURN_STALLED` (`hasKnownPendingWork` wired
+  in `internal-api/server.ts`; only antigravity answers true). Nothing is
+  synthesised or sent on the wire, and no ceiling is weakened: the hard turn
+  ceiling, the background watch ceiling, the receipt `turnMaxMs` ceiling and
+  user abort/delete all still end the turn. Without a tracked running task
+  (task completed, cancelled, timed out, no-activity run) both clocks behave
+  exactly as before. Before this, a legitimate 33-minute background command was
+  killed as a stall at the 15-minute idle window.
 - Only a process that dies on its own (`process-exited`) retries within
   `antigravityMaxAttempts`, respawning with `--conversation`. A stall or ceiling
   timeout finalises the turn as an error and does **not** retry (a retry would

@@ -54,6 +54,8 @@ interface HarnessOptions {
   toolStallTimeoutMs?: number;
   idleTimeoutMs?: number;
   onEvent?: (parsed: ParsedAgyLine) => void;
+  /** Lane B: does the owning service still track running background work? */
+  hasPendingBackgroundWork?: () => boolean;
 }
 
 function makeHarness(opts: HarnessOptions = {}) {
@@ -69,6 +71,7 @@ function makeHarness(opts: HarnessOptions = {}) {
     ...(opts.toolStallTimeoutMs !== undefined ? { toolStallTimeoutMs: opts.toolStallTimeoutMs } : {}),
     idleTimeoutMs: opts.idleTimeoutMs ?? 60_000,
     onEvent: opts.onEvent ?? ((parsed) => eventsEmitted.push(parsed)),
+    ...(opts.hasPendingBackgroundWork ? { hasPendingBackgroundWork: opts.hasPendingBackgroundWork } : {}),
     spawnFn: (() => child) as unknown as typeof import('node:child_process').spawn,
   });
   return { proc, child, eventsEmitted };
@@ -457,6 +460,108 @@ describe('AgyStreamProcess', () => {
     child.writeStdout(INIT_LINE);
     child.close(0);
     await expect(proc.writeTurn('after death')).rejects.toThrow(/exited/i);
+  });
+});
+
+describe('AgyStreamProcess — a known background task keeps the turn alive (lane B)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('re-arms the stall timer instead of SIGTERMing while the owner tracks a running background task, and kills as before once it is gone', async () => {
+    // agy 1.5.14 holds the stream turn open in silence while a native
+    // background command runs (probed T1/T2/T3). Silence is not a stall while
+    // the service still tracks that task, so the stall clock re-arms — and the
+    // turn is cut as a stall the moment the work is no longer tracked.
+    const { proc, child } = makeHarness({
+      timeoutMs: 10_000_000,
+      stallTimeoutMs: 10_000,
+      hasPendingBackgroundWork: () => pending,
+    });
+    let pending = true;
+    await proc.start();
+    child.writeStdout(INIT_LINE);
+    const turn = proc.writeTurn('run the long command');
+
+    // Ten consecutive stall windows, none of which may kill the turn.
+    for (let i = 0; i < 10; i += 1) {
+      await vi.advanceTimersByTimeAsync(10_001);
+      expect(child.signals).not.toContain('SIGTERM');
+      expect(proc.hasExited).toBe(false);
+    }
+
+    // The task finished: the next silent window is a real stall again.
+    pending = false;
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(child.signals).toContain('SIGTERM');
+    expect((await turn).reason).toBe('stall');
+  });
+
+  it('the hard turn ceiling still fires while a background task is tracked', async () => {
+    // The agy hard turn timer (ANTIGRAVITY_PROMPT_TIMEOUT_MS, 60 min in
+    // production) is a runaway backstop, never a work limit: pending background
+    // work defers the STALL clock only.
+    const { proc, child } = makeHarness({
+      timeoutMs: 15_000,
+      stallTimeoutMs: 10_000,
+      hasPendingBackgroundWork: () => true,
+    });
+    await proc.start();
+    child.writeStdout(INIT_LINE);
+    const turn = proc.writeTurn('background command, then silence');
+
+    await vi.advanceTimersByTimeAsync(10_001); // stall window: deferred
+    expect(child.signals).not.toContain('SIGTERM');
+
+    await vi.advanceTimersByTimeAsync(5_000); // hard ceiling reached
+    expect(child.signals).toContain('SIGTERM');
+    expect((await turn).reason).toBe('timeout');
+  });
+
+  it('a predicate that answers false changes nothing: the stall kills the turn as today', async () => {
+    const { proc, child } = makeHarness({
+      timeoutMs: 10_000_000,
+      stallTimeoutMs: 10_000,
+      hasPendingBackgroundWork: () => false,
+    });
+    await proc.start();
+    child.writeStdout(INIT_LINE);
+    const turn = proc.writeTurn('genuinely stalled turn');
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(child.signals).toContain('SIGTERM');
+    expect((await turn).reason).toBe('stall');
+  });
+
+  it('a throwing predicate cannot save a stalled turn (the stall path stays intact)', async () => {
+    const { proc, child } = makeHarness({
+      timeoutMs: 10_000_000,
+      stallTimeoutMs: 10_000,
+      hasPendingBackgroundWork: () => {
+        throw new Error('service lookup failed');
+      },
+    });
+    await proc.start();
+    child.writeStdout(INIT_LINE);
+    const turn = proc.writeTurn('stalled turn');
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(child.signals).toContain('SIGTERM');
+    expect((await turn).reason).toBe('stall');
+  });
+
+  it('an idle process (no pending turn) never consults the predicate or kills anything', async () => {
+    const asked = vi.fn(() => true);
+    const { proc, child } = makeHarness({ idleTimeoutMs: 2_000, hasPendingBackgroundWork: asked });
+    await proc.start();
+    child.writeStdout(INIT_LINE);
+    const done = proc.writeTurn('quick');
+    child.writeStdout(resultLine());
+    await done;
+    await vi.advanceTimersByTimeAsync(2_001);
+    expect(asked).not.toHaveBeenCalled();
+    expect(child.signals).toEqual([]);
   });
 });
 

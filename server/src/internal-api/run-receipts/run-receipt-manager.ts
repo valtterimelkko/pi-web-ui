@@ -117,6 +117,22 @@ export interface RunReceiptManagerDeps {
   drainPollMs?: number;
   /** L1: reconcile cadence for quarantined (never-confirmed) leases. Default 60000. */
   quarantineReconcileMs?: number;
+  /**
+   * Lane B (2026-11-22): does the owning runtime still track RUNNING background
+   * work for this session?
+   *
+   * A runtime may legitimately hold a turn open and silent while it supervises a
+   * long background command: agy 1.5.14 demotes a slow `run_command` to a
+   * background task, answers STARTED and emits nothing until that task finishes
+   * (live-probed: 90 s, 60 s and 33 min). Silence then means "still working", not
+   * "stalled", so the IDLE rule is deferred while this returns true. Nothing is
+   * synthesised and nothing is sent on the wire: the run stays active exactly as
+   * if it had just produced activity. The absolute ceiling (`turnMaxMs`), the
+   * runtime's own hard turn timer, the runtime's background watch ceiling and
+   * user abort/delete all still end the turn. Absent, empty or throwing → no
+   * deferral (today's behaviour). Other runtimes answer false in the wiring.
+   */
+  hasKnownPendingWork?: (sessionId: string, runtime: SessionRuntime) => boolean;
 }
 
 /** C3a (contract 1.58.0): one run's completion capture, fanned out to the per-session surface. */
@@ -166,6 +182,9 @@ interface ActiveRun {
   finalText: FinalTextTracker;
   /** Contract 1.58.0 (C3a): wider tail of the same final text, for completion-block parsing. */
   completionText: FinalTextTracker;
+  /** Lane B (2026-11-22): how many times the idle rule has been deferred for
+   *  known background work. Rate-bounds the info log (first, then every 10th). */
+  stallDeferrals?: number;
 }
 
 /**
@@ -202,6 +221,8 @@ export class RunReceiptManager {
   /** Draining runs: terminal but admission slot held pending runtime cessation. */
   private readonly draining = new Map<string, { release: () => void; timer: NodeJS.Timeout; quarantined: boolean; quarantinedAtMs?: number; sessionId: string; runtime?: SessionRuntime }>();
   private readonly quarantineReconcileMs: number;
+  /** Lane B: positive evidence of running background work owned by the runtime. */
+  private readonly hasKnownPendingWork?: (sessionId: string, runtime: SessionRuntime) => boolean;
   /** L1: one shared slow poll for every quarantined entry; running only while entries exist. */
   private quarantineReconciler?: NodeJS.Timeout;
 
@@ -230,6 +251,7 @@ export class RunReceiptManager {
     this.drainTimeoutMs = positiveTimeout(deps.drainTimeoutMs, undefined, DEFAULT_DRAIN_TIMEOUT_MS);
     this.drainPollMs = positiveTimeout(deps.drainPollMs, undefined, DEFAULT_DRAIN_POLL_MS);
     this.quarantineReconcileMs = positiveTimeout(deps.quarantineReconcileMs, undefined, DEFAULT_QUARANTINE_RECONCILE_MS);
+    this.hasKnownPendingWork = deps.hasKnownPendingWork;
   }
 
   async init(): Promise<void> {
@@ -757,6 +779,21 @@ export class RunReceiptManager {
       if (!idleExceeded && !maxExceeded) continue;
       const before = this.store.get(runId);
       if (!before || isTerminal(before.status)) continue;
+      // Lane B (2026-11-22): a runtime that still tracks running background work
+      // is silent by design, so the IDLE rule is deferred — not the absolute
+      // ceiling, and not the never-started branch above. Nothing is written and
+      // nothing is published: the run simply stays active, exactly as if it had
+      // produced activity, and the ceilings still end it.
+      if (!maxExceeded && this.pendingWorkDefersStall(active)) {
+        active.stallDeferrals = (active.stallDeferrals ?? 0) + 1;
+        // Rate-bound the visibility: first deferral, then every 10th.
+        if (active.stallDeferrals === 1 || active.stallDeferrals % 10 === 0) {
+          logger.info(
+            `Run ${runId} idle timeout deferred (deferral ${active.stallDeferrals}): ${active.runtime} still tracks running background work for session ${active.sessionId}`,
+          );
+        }
+        continue;
+      }
       // A run that never produced a single eligible activity event was never
       // executing anything, so "idle" would misdescribe it. This is the
       // 2026-09-15 shape: a wake accepted onto a session that never ran it left
@@ -792,6 +829,23 @@ export class RunReceiptManager {
         // ping). No caller action is required.
         this.onStalled?.(terminal);
       }
+    }
+  }
+
+  /**
+   * Lane B (2026-11-22): ask the owning runtime whether it still tracks running
+   * background work for this session. A missing, empty or throwing predicate is
+   * "no evidence of pending work", so the watchdog behaves exactly as before.
+   */
+  private pendingWorkDefersStall(active: ActiveRun): boolean {
+    if (!this.hasKnownPendingWork) return false;
+    try {
+      return this.hasKnownPendingWork(active.sessionId, active.runtime) === true;
+    } catch (error) {
+      logger.warn(
+        `pending-work lookup failed for run ${active.runId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return false;
     }
   }
 
