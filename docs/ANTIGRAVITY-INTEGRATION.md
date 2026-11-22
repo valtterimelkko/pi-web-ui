@@ -292,22 +292,33 @@ Watchdogs (stream mode):
 - **Abort**: SIGTERM, consume agy's closing `result`, escalate to SIGKILL after
   a 5 s grace window. Reason comes from what WE sent (agy reports the same
   "timeout waiting for response" string for signals and print-timeout expiry).
-- **Known background work** (2026-11-22): agy 1.5.14 demotes a long
-  `run_command` to a background task, reports the task id, answers STARTED and
-  then emits **nothing at all** until that task finishes — live-probed holds of
-  90 s, 60 s and 33 min. That silence means "still working", not "hung", so
-  while `AntigravityService.hasRunningBackgroundTasks(sessionId)` is true (a
-  tracked task with status `running`, still inside
-  `antigravityBackgroundWatchMaxMs`) the stream stall clock **re-arms instead of
-  SIGTERMing**, and the Internal API run watchdog's 15-minute idle rule defers
+- **Known pending work** (2026-11-22): agy holds the stream turn open in
+  silence while its own command runs, and the wire shape differs by version:
+  older builds **demote** a long `run_command` to a background task and print
+  "Tool is running as a background task with task id: …", answer STARTED, then
+  emit **nothing at all** until that task finishes; agy 1.5.14 prints **no such
+  banner** and shows the command as a single `tool` step that arrives
+  `state: ACTIVE` with no output, stays ACTIVE for the command's whole run, then
+  `DONE` with the output (captured in
+  `server/tests/unit/antigravity/fixtures/raw-wire-agy-1.5.14.jsonl`).
+  Live-probed silent holds: 90 s, 60 s and 33 min. That silence means "still
+  working", not "hung", so `AntigravityService.hasKnownPendingWork(sessionId)`
+  answers true for **either** shape — a tracked background task with status
+  `running` still inside `antigravityBackgroundWatchMaxMs`, or a tool step in
+  flight in the current turn (`AgyStreamProcess.hasToolInFlight()`, ACTIVE and
+  not yet DONE) — and the Internal API run watchdog's 15-minute idle rule defers
   instead of terminalising the run `TURN_STALLED` (`hasKnownPendingWork` wired
-  in `internal-api/server.ts`; only antigravity answers true). Nothing is
-  synthesised or sent on the wire, and no ceiling is weakened: the hard turn
-  ceiling, the background watch ceiling, the receipt `turnMaxMs` ceiling and
-  user abort/delete all still end the turn. Without a tracked running task
-  (task completed, cancelled, timed out, no-activity run) both clocks behave
-  exactly as before. Before this, a legitimate 33-minute background command was
-  killed as a stall at the 15-minute idle window.
+  through `createKnownPendingWorkPredicate` in `internal-api/server.ts`; only
+  antigravity answers true). The stream stall clock already extends to
+  `ANTIGRAVITY_TOOL_STALL_TIMEOUT_MS` (30 min) while a tool is open, so a silent
+  tool is bounded there, and the hard turn ceiling, the background watch
+  ceiling, the receipt `turnMaxMs` ceiling and user abort/delete all still end
+  the turn. Nothing is synthesised or sent on the wire. Without a tracked
+  running task or an in-flight tool (command finished, cancelled, timed out,
+  no-activity run) both clocks behave exactly as before. Before this, a
+  legitimate 33-minute background command was killed as a stall at the
+  15-minute idle window, twice: once when only the stream clock was fixed, and
+  again when the watchdog was taught only the background-task banner.
 - Only a process that dies on its own (`process-exited`) retries within
   `antigravityMaxAttempts`, respawning with `--conversation`. A stall or ceiling
   timeout finalises the turn as an error and does **not** retry (a retry would

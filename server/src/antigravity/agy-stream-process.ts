@@ -132,6 +132,26 @@ export class AgyStreamProcess {
     return this.exited || this.terminating;
   }
 
+  /**
+   * Lane B2 (2026-11-22): is a tool step of the CURRENT turn still in flight?
+   *
+   * agy 1.5.14 demotes a long `run_command` to a single `tool` step that goes
+   * `ACTIVE` with no output, stays ACTIVE for the whole run, then `DONE` with
+   * the output (live capture:
+   * `tests/unit/antigravity/fixtures/raw-wire-agy-1.5.14.jsonl`). It no longer
+   * prints the older "Tool is running as a background task with task id: …"
+   * banner, so this state — not a task record — is what marks a silent turn as
+   * still working.
+   *
+   * True only while a turn is pending AND the process is neither exited nor
+   * terminating: tool steps are cleared when a `result` resolves the head turn,
+   * and a parked or dying process owns no in-flight work. Read-only: nothing
+   * here arms, re-arms or clears a timer.
+   */
+  hasToolInFlight(): boolean {
+    return this.activeToolSteps.size > 0 && this.pending.length > 0 && !this.hasExited;
+  }
+
   private buildArgs(): string[] {
     const args = ['--input-format', 'stream-json', '--output-format', 'stream-json'];
     // B1: never let agy parse an owner prompt as a slash command. On this stdin

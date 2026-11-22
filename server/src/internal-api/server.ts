@@ -77,6 +77,7 @@ import { CommandCodeService } from '../command-code/command-code-service.js';
 import { getDevinService, type DevinService } from '../devin/index.js';
 import { DrainController, composeInterruptedBusySessions, consumeDrainRecord, createBusySessionSource, type DrainBusySession } from './drain-controller.js';
 import { createDrainRoutes, isExecutionEntryRequest } from './routes/drain.js';
+import type { SessionRuntime } from './types.js';
 
 const logger = createLogger('InternalAPI');
 
@@ -227,6 +228,32 @@ export function createRuntimeQuiescencePredicate(deps: RuntimeQuiescencePredicat
       return readPiRuntimeQuiescence(() => deps.readPiStatus(entry.path));
     } catch {
       return false; // status lookup failure is not positive cessation evidence
+    }
+  };
+}
+
+/**
+ * Lane B2 (2026-11-22): the run watchdog's "does this session still have known
+ * work?" seam as a testable factory — the tests drive THIS, not a copy.
+ *
+ * Only antigravity tracks such work (a running background task, or a tool step
+ * in flight); every other runtime keeps today's behaviour and is never
+ * consulted. A throwing lookup is no evidence of pending work, so it never
+ * keeps a run alive.
+ */
+export interface KnownPendingWorkPredicateDeps {
+  hasKnownPendingWork: (sessionId: string) => boolean;
+}
+
+export function createKnownPendingWorkPredicate(
+  deps: KnownPendingWorkPredicateDeps,
+): (sessionId: string, runtime: SessionRuntime) => boolean {
+  return (sessionId, runtime) => {
+    if (runtime !== 'antigravity') return false;
+    try {
+      return deps.hasKnownPendingWork(sessionId) === true;
+    } catch {
+      return false; // no evidence of pending work: never defer on an error
     }
   };
 }
@@ -399,24 +426,23 @@ export class InternalApiServer {
         devinService: this.devinService,
         readPiStatus: (sessionPath) => this.multiSessionManager.getSessionStatus(sessionPath),
       }),
-      // Lane B (2026-11-22): a runtime that still tracks a RUNNING background
-      // task is silent by design. agy holds the stream turn open, emitting
-      // nothing, until its own background command finishes (live-probed: a
-      // 33-minute task went quiet for 15 minutes and this watchdog killed the
-      // legitimate command as TURN_STALLED). The watchdog therefore asks the
-      // owning runtime whether the session still has work it knows about, and
-      // defers the IDLE rule only — the absolute ceiling, the runtime's hard
-      // turn timer, the runtime's background watch ceiling and user
-      // abort/delete are untouched. Only Antigravity tracks such work; every
-      // other runtime answers false and keeps today's behaviour.
-      hasKnownPendingWork: (sessionId, runtime) => {
-        if (runtime !== 'antigravity') return false;
-        try {
-          return this.antigravityService.hasRunningBackgroundTasks(sessionId);
-        } catch {
-          return false; // no evidence of pending work: never defer on an error
-        }
-      },
+      // Lane B (2026-11-22) / lane B2 (2026-11-22): a runtime that still tracks
+      // running work is silent by design. agy holds the stream turn open,
+      // emitting nothing, until its command finishes. Two shapes count: a
+      // tracked background task that is RUNNING (older agy prints the task
+      // banner and answers STARTED), and a tool step in flight in the current
+      // turn (agy 1.5.14 demotes the command to one long ACTIVE `tool` step and
+      // prints no banner — the live P4 re-run was cut TURN_STALLED at 15 min by
+      // a 33-minute command that looked exactly like this). The watchdog
+      // therefore asks the owning runtime whether the session still has work it
+      // knows about, and defers the IDLE rule only — the absolute ceiling, the
+      // runtime's hard turn timer, the stream's tool-stall window, the runtime's
+      // background watch ceiling and user abort/delete are untouched. Only
+      // Antigravity tracks such work; every other runtime answers false and
+      // keeps today's behaviour.
+      hasKnownPendingWork: createKnownPendingWorkPredicate({
+        hasKnownPendingWork: (sessionId) => this.antigravityService.hasKnownPendingWork(sessionId),
+      }),
       // C2 (contract 1.57.0): the operator learns a dispatched run never
       // started without polling. The parent-watch firing sink is registered
       // separately by the route layer (it owns the watch manager).

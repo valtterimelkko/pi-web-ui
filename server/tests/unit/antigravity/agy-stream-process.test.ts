@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { Writable } from 'stream';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { AgyStreamProcess } from '../../../src/antigravity/agy-stream-process.js';
 import type { ParsedAgyLine } from '../../../src/antigravity/agy-event-types.js';
 import { parseAgyLine } from '../../../src/antigravity/agy-event-types.js';
@@ -562,6 +564,96 @@ describe('AgyStreamProcess — a known background task keeps the turn alive (lan
     await vi.advanceTimersByTimeAsync(2_001);
     expect(asked).not.toHaveBeenCalled();
     expect(child.signals).toEqual([]);
+  });
+});
+
+/**
+ * Lane B2 (2026-11-22): agy 1.5.14's REAL wire, captured with the same argv the
+ * service uses (`/root/orch-ops/agy-post-turn-20261122/laneB2/raw-wire-agy-1.5.14.jsonl`)
+ * for a 20-second `run_command`. It no longer prints "Tool is running as a
+ * background task …": the command is a single `tool` step that goes ACTIVE (no
+ * output), stays ACTIVE for the whole run, then DONE with the output. Nothing is
+ * stripped from the capture.
+ */
+const RAW_WIRE_1_5_14 = readFileSync(
+  fileURLToPath(new URL('./fixtures/raw-wire-agy-1.5.14.jsonl', import.meta.url)),
+  'utf8',
+)
+  .split('\n')
+  .filter((line) => line.trim().length > 0);
+
+describe('AgyStreamProcess — a tool step in flight is known pending work (lane B2)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const lineIndex = (predicate: (parsed: Record<string, unknown>) => boolean): number => {
+    const idx = RAW_WIRE_1_5_14.findIndex((line) => predicate(JSON.parse(line) as Record<string, unknown>));
+    if (idx < 0) throw new Error('fixture shape changed: expected line not found');
+    return idx;
+  };
+
+  it('the captured 1.5.14 wire: false before the tool, true while its step is ACTIVE, false after DONE and after result', async () => {
+    // The real capture, one captured line at a time, through the real reader.
+    // Production shape: a tool's silence gets the long tool-stall window
+    // (ANTIGRAVITY_TOOL_STALL_TIMEOUT_MS, 30 min), so the stream's own clock is
+    // deliberately NOT what this test exercises.
+    const { proc, child } = makeHarness({ timeoutMs: 10_000_000, stallTimeoutMs: 10_000, toolStallTimeoutMs: 100_000 });
+    await proc.start();
+    const turn = proc.writeTurn('sleep 20 && date -u');
+
+    const activeToolAt = lineIndex((e) => {
+      const step = e.step_update as { state?: string; step_type?: string } | undefined;
+      return e.event === 'step_update' && step?.step_type === 'tool' && step.state === 'ACTIVE';
+    });
+    const doneToolAt = lineIndex((e) => {
+      const step = e.step_update as { state?: string; step_type?: string } | undefined;
+      return e.event === 'step_update' && step?.step_type === 'tool' && step.state === 'DONE';
+    });
+    const resultAt = lineIndex((e) => e.event === 'result');
+    expect(activeToolAt).toBeLessThan(doneToolAt);
+    expect(doneToolAt).toBeLessThan(resultAt);
+
+    // Before the run_command step: nothing in flight.
+    for (const line of RAW_WIRE_1_5_14.slice(0, activeToolAt)) child.writeStdout(line);
+    expect(proc.hasToolInFlight()).toBe(false);
+
+    // The command is running: the step is ACTIVE and silent for its whole run.
+    child.writeStdout(RAW_WIRE_1_5_14[activeToolAt]);
+    expect(proc.hasToolInFlight()).toBe(true);
+
+    // Still true while the silence continues (the live failure shape: 33 min of it).
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(proc.hasToolInFlight()).toBe(true);
+    expect(child.signals).not.toContain('SIGTERM');
+
+    // DONE carries the output: the tool is no longer in flight.
+    for (const line of RAW_WIRE_1_5_14.slice(activeToolAt + 1, resultAt)) child.writeStdout(line);
+    expect(proc.hasToolInFlight()).toBe(false);
+
+    // The closing result ends the turn: still nothing in flight.
+    child.writeStdout(RAW_WIRE_1_5_14[resultAt]);
+    await turn;
+    expect(proc.hasToolInFlight()).toBe(false);
+  });
+
+  it('is false with no pending turn and after the process has exited (a parked process owns no in-flight work)', async () => {
+    const { proc, child } = makeHarness({ timeoutMs: 10_000_000, stallTimeoutMs: 10_000 });
+    await proc.start();
+    child.writeStdout(INIT_LINE);
+    expect(proc.hasToolInFlight()).toBe(false);
+
+    const done = proc.writeTurn('run a tool');
+    child.writeStdout('{"event":"step_update","step_update":{"conversation_id":"c-abc","step_index":3,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}');
+    expect(proc.hasToolInFlight()).toBe(true);
+
+    child.close(0);
+    await done;
+    expect(proc.hasExited).toBe(true);
+    expect(proc.hasToolInFlight()).toBe(false);
   });
 });
 

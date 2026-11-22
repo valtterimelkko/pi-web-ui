@@ -1054,6 +1054,41 @@ export class AntigravityService {
     return false;
   }
 
+  /**
+   * Lane B2 (2026-11-22): does this session's live stream process have a tool
+   * step in flight in the current turn?
+   *
+   * agy 1.5.14 no longer prints "Tool is running as a background task …": a
+   * demoted `run_command` is ONE `tool` step that stays `ACTIVE` and silent for
+   * the command's whole run (live capture:
+   * `tests/unit/antigravity/fixtures/raw-wire-agy-1.5.14.jsonl`). The stream
+   * process already tracks that state for its own stall clock, so it is the
+   * honest answer here too. Read-only: it neither touches the process's timers
+   * nor creates one; a session with no live process is false.
+   */
+  hasToolInFlight(sessionId: string): boolean {
+    return this.streamProcesses.get(sessionId)?.hasToolInFlight() === true;
+  }
+
+  /**
+   * Lane B2 (2026-11-22): the single question the Internal API run watchdog
+   * asks — "does this session still have work we know about, so that its
+   * silence means 'still working' rather than 'stalled'?".
+   *
+   * Two independent shapes count, because agy's wire differs by version:
+   *   - a tracked background task that is RUNNING (lane B — older builds print
+   *     the task banner and answer STARTED);
+   *   - a tool step in flight in the current turn (lane B2 — agy 1.5.14 demotes
+   *     the command to one long ACTIVE `tool` step and prints no banner).
+   * Neither weakens a ceiling: the stream's own stall clock (the 30-minute
+   * `ANTIGRAVITY_TOOL_STALL_TIMEOUT_MS` window while a tool is open), the hard
+   * turn timer, the background watch ceiling and user abort/delete all still end
+   * the turn. An unknown session is false.
+   */
+  hasKnownPendingWork(sessionId: string): boolean {
+    return this.hasRunningBackgroundTasks(sessionId) || this.hasToolInFlight(sessionId);
+  }
+
   /** Poll the on-disk agy message receipts for every running background task
    *  and transition the ones that finished. Bounded: only sessions with
    *  running tasks are touched, each dir read is a single readdir. */
