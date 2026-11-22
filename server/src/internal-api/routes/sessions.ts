@@ -80,7 +80,7 @@ import { createPeerParentResolver, type PeerParentResolution } from '../parent-r
 import { readClaudeGoalStatuses, projectClaudeGoal, composeClaudeGoalCommand, CLAUDE_GOAL_CONTINUATION_PROMPT, resolveClaudeTranscriptPath, resolveClaudeProjectsRoot } from '../goal/claude-goal.js';
 import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, GoalSweepReadCache, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
 import { projectCommandCodeGoal } from '../goal/commandcode-goal.js';
-import { AntigravityGoalControlStore, buildAgyGoalContinuationPrompt, buildAgyGoalStartPrompt, createAgyGoalSweeper, loadAgyGoalAutoContinueConfig, parseAgyGoalCommand, projectAgyGoal, type AgyGoalCommand } from '../goal/antigravity-goal.js';
+import { AGY_GOAL_RESUME_PATCH, AntigravityGoalControlStore, buildAgyGoalContinuationPrompt, buildAgyGoalStartPrompt, createAgyGoalSweeper, loadAgyGoalAutoContinueConfig, parseAgyGoalCommand, projectAgyGoal, type AgyGoalCommand } from '../goal/antigravity-goal.js';
 import { DevinGoalControlStore, buildDevinGoalContinuationPrompt, buildDevinGoalStartPrompt, createDevinGoalSweeper, loadDevinGoalAutoContinueConfig, parseDevinGoalCommand, projectDevinGoal, type DevinGoalCommand } from '../goal/devin-goal.js';
 import { buildGoalBrowserMessages } from '../goal/browser-bridge.js';
 import type { SessionGoalProjection } from '../goal/types.js';
@@ -5977,6 +5977,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         completedAt: null,
         clearedAt: undefined,
         consecutiveErrors: 0,
+        // Lane C: a start opens a clean cycle, so no stale transient backoff.
+        retryNotBefore: undefined,
         pendingContinuation: false,
         lastVerifiedTurnAt: undefined,
         autoContinue: raw.autoContinue !== false,
@@ -6018,8 +6020,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         sendJson(res, 409, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'no goal is armed for this session'));
         return;
       }
-      // A resume opens a fresh provider-error strike window (contract 1.58.3).
-      await agyGoalStore.patch(sessionId, { status: 'running', pausedReason: undefined, autoContinue: true, consecutiveErrors: 0 });
+      // A resume opens a fresh provider-error strike window (contract 1.58.3) and
+      // drops any transient backoff (lane C): an operator who resumes wants the
+      // continuation now, not at the old retry instant.
+      await agyGoalStore.patch(sessionId, AGY_GOAL_RESUME_PATCH);
       let continuationDispatched = false;
       if (!antigravityService.isRunning(sessionId)) {
         const dispatched = await dispatchDetachedInternal(sessionId, buildAgyGoalContinuationPrompt(existing.objective, existing.verifyCommand !== undefined));

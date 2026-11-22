@@ -23,6 +23,7 @@ import { exec } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { applyChildOomScoreAdj } from '../../oom-score-adj.js';
+import { classifyAgyError } from '../../antigravity/agy-error-class.js';
 import type { AgyCompletedTurn } from '../../antigravity/antigravity-service.js';
 import type { GoalVerificationInfo, SessionGoalProjection } from './types.js';
 
@@ -31,8 +32,36 @@ export const AGY_GOAL_SENTINEL = 'GOAL_STATUS: ACHIEVED';
 
 /** Consecutive provider-error turns after which the sweeper pauses the goal
  *  (contract 1.58.3, mirroring the Pi goal engine's three-strike rule: errors
- *  1..n-1 retry the continuation, the nth pauses). */
+ *  1..n-1 retry the continuation, the nth pauses). A quota-exhausted turn is
+ *  not counted at all: retrying cannot help, so it pauses on the first strike. */
 export const AGY_GOAL_MAX_CONSECUTIVE_ERRORS = 3;
+
+/**
+ * Transient provider-error backoff (lane C): a Google 500/503 is worth waiting
+ * out, so strike N waits this long before the continuation is retried. Instant
+ * retries are what turned the 1 Oct 2026 provider storm into 27 failed turns in
+ * 12 minutes. Strike 1 ≥ 30 s, strike 2 ≥ 90 s; a third strike pauses instead.
+ */
+export const AGY_GOAL_TRANSIENT_BACKOFF_MS: readonly number[] = [30_000, 90_000];
+
+/** Backoff before retrying the continuation for strike `strikes` (1-based). */
+export function agyTransientBackoffMs(strikes: number): number {
+  const index = Math.min(Math.max(strikes, 1), AGY_GOAL_TRANSIENT_BACKOFF_MS.length) - 1;
+  return AGY_GOAL_TRANSIENT_BACKOFF_MS[index];
+}
+
+/**
+ * The patch a manual resume applies (lane C): re-arm the goal, open a fresh
+ * provider-error strike window and drop any transient backoff — an operator who
+ * resumes wants the continuation now, not at the old retry instant.
+ */
+export const AGY_GOAL_RESUME_PATCH = {
+  status: 'running',
+  pausedReason: undefined,
+  autoContinue: true,
+  consecutiveErrors: 0,
+  retryNotBefore: undefined,
+} as const;
 
 const SENTINEL_RE = /GOAL_STATUS:\s*ACHIEVED/i;
 
@@ -114,6 +143,9 @@ export interface AntigravityGoalRecord {
    *  successful turn; the pause ends the cycle and resets it (the count that
    *  caused a pause is stated in `lastReason`). */
   consecutiveErrors?: number;
+  /** Transient-error backoff (lane C): ISO instant before which the owed
+   *  continuation must not be dispatched. Absent = due immediately. */
+  retryNotBefore?: string;
   /** A resume re-armed the goal but its continuation could not be dispatched
    *  (the session was still settling). The sweeper owes that continuation until
    *  a dispatch is accepted or a newer completed turn supersedes it. */
@@ -340,6 +372,21 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
   let timer: NodeJS.Timeout | undefined;
   const lastPublished = new Map<string, string>();
   const lastTerminal = new Map<string, string>();
+  /** Serialises sweeps so two overlapping sweeps cannot dispatch one owed
+   *  continuation twice (lane C). */
+  let sweepQueue: Promise<void> = Promise.resolve();
+
+  /**
+   * A transient strike whose recorded backoff has not elapsed is not due; a
+   * record with no strike window (a resume reset the count) is due at once, so
+   * an operator resume never waits out the old instant.
+   */
+  function retryDue(record: AntigravityGoalRecord): boolean {
+    if (!record.retryNotBefore) return true;
+    if ((record.consecutiveErrors ?? 0) === 0) return true;
+    const at = Date.parse(record.retryNotBefore);
+    return !Number.isFinite(at) || now() >= at;
+  }
 
   function projectionOf(record: AntigravityGoalRecord): SessionGoalProjection {
     return projectAgyGoal(record);
@@ -366,7 +413,28 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
   }
 
   const sweeper: AgyGoalSweeper = {
-    async sweepOnce(): Promise<void> {
+    sweepOnce(): Promise<void> {
+      // Lane C: sweeps are serialised. A timer sweep and a turn-driven sweep can
+      // otherwise overlap on the same owed continuation and dispatch it twice;
+      // each queued sweep then sees the previous one's record and does nothing.
+      const next = sweepQueue.then(() => runSweep());
+      sweepQueue = next.catch(() => undefined);
+      return next;
+    },
+    start(): void {
+      if (timer || !deps.config.enabled) return;
+      timer = setInterval(() => { void sweeper.sweepOnce(); }, deps.config.sweepIntervalMs);
+      timer.unref?.();
+    },
+    stop(): void {
+      if (timer) clearInterval(timer);
+      timer = undefined;
+    },
+  };
+  return sweeper;
+
+  async function runSweep(): Promise<void> {
+    {
       if (!deps.config.enabled) return;
       let sessionIds: string[] = [];
       try {
@@ -416,12 +484,19 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
           if (!turnIsNew) {
             // A resume whose continuation was refused (the session was still
             // settling) left no new turn to advance from: dispatch the owed
-            // continuation now. A refused dispatch throws and is retried on the
+            // continuation now — but only once its transient backoff has
+            // elapsed (lane C). A refused dispatch throws and is retried on the
             // next sweep; the flag clears only once a dispatch is accepted.
-            const owed = record.pendingContinuation ? await stillArmed(sessionId, record.lastVerifiedTurnAt, turn?.completedAt, true) : null;
+            const owed = record.pendingContinuation && retryDue(record)
+              ? await stillArmed(sessionId, record.lastVerifiedTurnAt, turn?.completedAt, true)
+              : null;
             if (owed) {
-              await deps.dispatch(sessionId, continuationFor(owed));
-              await deps.getStore().patch(sessionId, { pendingContinuation: false });
+              try {
+                await deps.dispatch(sessionId, continuationFor(owed));
+              } catch {
+                continue; // refused: stays owed for the next sweep, never double-counted
+              }
+              await deps.getStore().patch(sessionId, { pendingContinuation: false, retryNotBefore: undefined });
             }
             continue;
           }
@@ -435,9 +510,33 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
           // way). Consecutive strikes pause the goal; a successful turn resets the
           // count. Strikes 1..n-1 retry the continuation, mirroring the Pi goal
           // engine's three-strike rule for real errors (retry, then pause).
+          //
+          // Lane C splits the strikes by provider-error class:
+          //   quota     — stop at once (retrying cannot help until the reset);
+          //   transient — wait out a backoff before retrying (Google 500/503);
+          //   other     — the pre-existing retry-then-record behaviour.
           if (turn.status === 'error') {
             const strikes = (record.consecutiveErrors ?? 0) + 1;
             const errorText = turn.error?.trim() || turn.response.trim() || 'unknown provider error';
+            // Classify the FAILED TURN's own error text only — never the response
+            // body, which is partial assistant prose and can quote any error.
+            const classification = classifyAgyError(turn.error, { now });
+
+            if (classification.kind === 'quota') {
+              const resetNote = classification.resetAt ? ` (resets at ${classification.resetAt})` : '';
+              const patched = await deps.getStore().patch(sessionId, {
+                status: 'paused',
+                pausedReason: 'error',
+                consecutiveErrors: 0,
+                retryNotBefore: undefined,
+                pendingContinuation: false,
+                lastReason: `goal paused: provider quota exhausted${resetNote}; retrying cannot help until the quota resets; last error: ${errorText}`,
+                lastVerifiedTurnAt: turn.completedAt,
+              });
+              publishIfChanged(sessionId, patched);
+              continue;
+            }
+
             if (strikes >= AGY_GOAL_MAX_CONSECUTIVE_ERRORS) {
               const patched = await deps.getStore().patch(sessionId, {
                 status: 'paused',
@@ -446,12 +545,31 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
                 // resume starts a fresh three-strike window. The count that caused
                 // the pause is stated in lastReason.
                 consecutiveErrors: 0,
+                retryNotBefore: undefined,
                 lastReason: `goal paused after ${strikes} consecutive provider errors; last error: ${errorText}`,
                 lastVerifiedTurnAt: turn.completedAt,
               });
               publishIfChanged(sessionId, patched);
               continue;
             }
+
+            if (classification.kind === 'transient') {
+              // Record the strike and its retry instant in ONE update, then leave
+              // the dispatch to the owed-continuation path once the backoff has
+              // elapsed. The backoff lives on the record, not in a timer, so a
+              // restart or an overlapping sweep cannot retry early or twice.
+              const retryAt = new Date(now() + agyTransientBackoffMs(strikes)).toISOString();
+              const patched = await deps.getStore().patch(sessionId, {
+                consecutiveErrors: strikes,
+                retryNotBefore: retryAt,
+                pendingContinuation: true,
+                lastReason: `provider error (strike ${strikes}/${AGY_GOAL_MAX_CONSECUTIVE_ERRORS}, transient provider error): ${errorText}; retrying no earlier than ${retryAt}`,
+                lastVerifiedTurnAt: turn.completedAt,
+              });
+              publishIfChanged(sessionId, patched);
+              continue;
+            }
+
             // Retry first, record second: if the continuation is refused because
             // the session is still settling (the route's admission lease can
             // outlive the turn's finalisation), the strike must not be consumed —
@@ -461,6 +579,8 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
             await deps.dispatch(sessionId, continuationFor(armedForRetry, turn.error === 'timeout' || turn.error === 'stall'));
             const patched = await deps.getStore().patch(sessionId, {
               consecutiveErrors: strikes,
+              // An unclassified error is not on a backoff (and drops any stale one).
+              retryNotBefore: undefined,
               lastReason: `provider error (strike ${strikes}/${AGY_GOAL_MAX_CONSECUTIVE_ERRORS}): ${errorText}`,
               lastVerifiedTurnAt: turn.completedAt,
             });
@@ -485,6 +605,7 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
               verification: result.verification,
               lastReason: result.verification.message ?? (recovered ? undefined : record.lastReason),
               consecutiveErrors: 0,
+              retryNotBefore: undefined,
               lastVerifiedTurnAt: turn.completedAt,
             });
             publishIfChanged(sessionId, patched);
@@ -499,6 +620,7 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
               verification: result.verification,
               lastReason: `goal run budget exhausted (${record.maxRuns} runs) without achieving the goal; start or resume to re-arm`,
               consecutiveErrors: 0,
+              retryNotBefore: undefined,
               lastVerifiedTurnAt: turn.completedAt,
             });
             publishIfChanged(sessionId, patched);
@@ -510,6 +632,8 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
             verification: result.verification,
             lastReason: result.verification.message ?? (recovered ? undefined : record.lastReason),
             consecutiveErrors: 0,
+            // A successful turn clears the transient backoff along with the strike.
+            retryNotBefore: undefined,
             lastVerifiedTurnAt: turn.completedAt,
           });
           publishIfChanged(sessionId, patched);
@@ -528,16 +652,6 @@ export function createAgyGoalSweeper(deps: AgyGoalSweeperDeps): AgyGoalSweeper {
           /* per-session isolation: one bad session cannot stop the sweep */
         }
       }
-    },
-    start(): void {
-      if (timer || !deps.config.enabled) return;
-      timer = setInterval(() => { void sweeper.sweepOnce(); }, deps.config.sweepIntervalMs);
-      timer.unref?.();
-    },
-    stop(): void {
-      if (timer) clearInterval(timer);
-      timer = undefined;
-    },
-  };
-  return sweeper;
+    }
+  }
 }

@@ -12,7 +12,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
+  AGY_GOAL_RESUME_PATCH,
   AGY_GOAL_SENTINEL,
+  AGY_GOAL_TRANSIENT_BACKOFF_MS,
   type AntigravityGoalRecord,
   AntigravityGoalControlStore,
   type AgyGoalAutoContinueConfig,
@@ -220,6 +222,8 @@ interface SweeperHarness {
   dir: string;
   turns: Map<string, { completedAt: number; response: string; status?: 'done' | 'error'; error?: string } | null>;
   running: Set<string>;
+  /** Movable fake clock: the sweeper sees exactly the instant a test sets. */
+  clock: { now: number };
   deps: AgyGoalSweeperDeps;
 }
 
@@ -234,11 +238,12 @@ async function harness(records: Record<string, AntigravityGoalRecord>, config: P
     dir,
     turns: new Map(),
     running: new Set(),
+    clock: { now: 1000 },
     deps: undefined as unknown as AgyGoalSweeperDeps,
   };
   h.deps = {
     config: { enabled: true, sweepIntervalMs: 1000, maxRuns: 3, verifyTimeoutMs: 1000, ...config },
-    now: () => 1000,
+    now: () => h.clock.now,
     listGoalSessions: async () => Object.keys(records),
     isRunning: (id) => h.running.has(id),
     getStore: () => store,
@@ -259,6 +264,7 @@ describe('createAgyGoalSweeper', () => {
 
     const after = await h.store.get('s1');
     expect(after).toMatchObject({ status: 'achieved', runs: 1, completedAt: 1000, lastVerifiedTurnAt: 500 });
+    expect(after?.consecutiveErrors ?? 0).toBe(0);
     expect(h.dispatched).toEqual([]);
     expect(h.events.map((e) => e.event.type)).toEqual(['goal_state', 'goal_end']);
   });
@@ -334,7 +340,7 @@ describe('createAgyGoalSweeper', () => {
   });
 });
 
-// ─── provider-error strikes (contract 1.58.3) ────────────────────────────────
+// ─── provider-error strikes (contract 1.58.3) and error classes ──────────────
 
 /** Real error strings from the H2s Gemini session `cefdf34a-abf7-441f-b075-5af3d980c1b1`
  *  (2026-10-01): every one of its 27 turns was finalized `status: "error"` and the
@@ -342,9 +348,12 @@ describe('createAgyGoalSweeper', () => {
 const AGY_H2S_ERROR_500 = 'INTERNAL (code 500): Internal error encountered.';
 const AGY_H2S_ERROR_503 =
   'Our servers are experiencing high traffic right now, please try again in a minute. (UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-high on the server)';
+/** Real quota text: the 19 Nov 2026 storm failed 321 agy conversations inside an hour. */
+const AGY_QUOTA = 'RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).';
+const AGY_QUOTA_WITH_RESET = `${AGY_QUOTA} Quota resets at 2026-11-22T09:30:00Z.`;
 
 describe('createAgyGoalSweeper — provider-error strikes (contract 1.58.3)', () => {
-  it('counts a provider-error turn as a strike instead of consuming a run, and retries', async () => {
+  it('counts a provider-error turn as a strike instead of consuming a run, then retries after the transient backoff', async () => {
     const h = await harness({ s1: record({ maxRuns: 40 }) });
     h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
     await createAgyGoalSweeper(h.deps).sweepOnce();
@@ -352,20 +361,73 @@ describe('createAgyGoalSweeper — provider-error strikes (contract 1.58.3)', ()
     const after = await h.store.get('s1');
     expect(after).toMatchObject({ status: 'running', runs: 0, consecutiveErrors: 1, lastVerifiedTurnAt: 500 });
     expect(after?.lastReason).toContain(AGY_H2S_ERROR_500);
-    // One retry continuation (Pi's three-strike rule retries between strikes),
-    // not an ordinary unmet-turn advance.
-    expect(h.dispatched).toHaveLength(1);
+    // A Google 500 is transient: retried, but never instantly. The strike and its
+    // retry instant are recorded in one update; nothing is dispatched yet.
+    expect(h.dispatched).toHaveLength(0);
+    expect(after?.pendingContinuation).toBe(true);
+    expect(Date.parse(String(after?.retryNotBefore)) - h.clock.now).toBeGreaterThanOrEqual(30_000);
     expect(h.events.map((e) => e.event.type)).toEqual(['goal_state']);
     expect(h.events[0].event.data).toMatchObject({ status: 'running', runs: 0, pausedReason: null });
+
+    // Once the backoff passes the continuation lands exactly once, as a retry of
+    // the same strike (no second strike, no consumed run).
+    h.clock.now += 30_000;
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+    expect(h.dispatched).toHaveLength(1);
+    expect(h.dispatched[0].message).toContain('Ship it');
+    const retried = await h.store.get('s1');
+    expect(retried).toMatchObject({ status: 'running', runs: 0, consecutiveErrors: 1 });
+    expect(retried?.pendingContinuation).toBeFalsy();
+    expect(retried?.retryNotBefore).toBeUndefined();
+  });
+
+  it('waits at least 30 s before retrying strike 1 and at least 90 s before retrying strike 2', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    const sweeper = createAgyGoalSweeper(h.deps);
+
+    h.turns.set('s1', { completedAt: 100, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
+    await sweeper.sweepOnce();
+    const first = await h.store.get('s1');
+    expect(first?.consecutiveErrors).toBe(1);
+    expect(Date.parse(String(first?.retryNotBefore)) - h.clock.now).toBeGreaterThanOrEqual(30_000);
+    // Nothing inside the window: the retry is owed, not attempted.
+    h.clock.now += 29_000;
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(0);
+    h.clock.now += 1_000;
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(1);
+
+    // Second strike: a longer wait, still not instant, still not a new run.
+    h.turns.set('s1', { completedAt: 200, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    await sweeper.sweepOnce();
+    const second = await h.store.get('s1');
+    expect(second?.consecutiveErrors).toBe(2);
+    expect(Date.parse(String(second?.retryNotBefore)) - h.clock.now).toBeGreaterThanOrEqual(90_000);
+    h.clock.now += 89_000;
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(1);
+    h.clock.now += 1_000;
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(2);
+    expect(await h.store.get('s1')).toMatchObject({ runs: 0, consecutiveErrors: 2 });
   });
 
   it('pauses after three consecutive strikes with pausedReason error, naming the last error, and dispatches nothing further', async () => {
     const h = await harness({ s1: record({ maxRuns: 40 }) });
     const sweeper = createAgyGoalSweeper(h.deps);
+    // Two transient strikes, each retried once its backoff elapsed.
     h.turns.set('s1', { completedAt: 100, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    await sweeper.sweepOnce();
+    h.clock.now += 30_000;
     await sweeper.sweepOnce();
     h.turns.set('s1', { completedAt: 200, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
     await sweeper.sweepOnce();
+    h.clock.now += 90_000;
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(2);
+
+    // The third strike pauses regardless of class (the existing three-strike rule).
     h.turns.set('s1', { completedAt: 300, response: 'timeout', status: 'error', error: 'timeout' });
     await sweeper.sweepOnce();
 
@@ -373,6 +435,7 @@ describe('createAgyGoalSweeper — provider-error strikes (contract 1.58.3)', ()
     expect(after).toMatchObject({ status: 'paused', pausedReason: 'error', runs: 0, lastVerifiedTurnAt: 300 });
     expect(after?.lastReason).toContain('timeout');
     expect(after?.lastReason).toMatch(/3 consecutive provider errors/);
+    expect(after?.retryNotBefore).toBeUndefined();
     // Only the two retries; the pausing strike dispatches nothing.
     expect(h.dispatched).toHaveLength(2);
 
@@ -388,34 +451,42 @@ describe('createAgyGoalSweeper — provider-error strikes (contract 1.58.3)', ()
     expect(h.dispatched).toHaveLength(2);
   });
 
-  it('a refused retry does not consume the strike: the next sweep retries the same turn exactly once', async () => {
+  it('a refused retry does not consume the strike: it stays owed and is sent exactly once when the route accepts', async () => {
     const h = await harness({ s1: record({ maxRuns: 40 }) });
     let attempts = 0;
+    let refuse = true;
     h.deps.dispatch = async (id, message) => {
       attempts += 1;
       // The live race: the route's admission lease can outlive the turn's
       // finalisation, so an immediate continuation is refused 409.
-      if (attempts === 1) throw new Error('goal continuation dispatch failed (409)');
+      if (refuse) throw new Error('goal continuation dispatch failed (409)');
       h.dispatched.push({ sessionId: id, message });
     };
     h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
     const sweeper = createAgyGoalSweeper(h.deps);
 
     await sweeper.sweepOnce();
-    const refused = await h.store.get('s1');
-    expect(refused?.consecutiveErrors).toBeUndefined();
-    expect(refused?.lastVerifiedTurnAt).toBeUndefined();
+    const struck = await h.store.get('s1');
+    // The strike is counted once and the retry is owed with a backoff instant —
+    // a refused dispatch cannot be lost, and it cannot be double-counted either.
+    expect(struck).toMatchObject({ status: 'running', runs: 0, consecutiveErrors: 1, lastVerifiedTurnAt: 500, pendingContinuation: true });
     expect(h.dispatched).toHaveLength(0);
 
-    // The next sweep retries the SAME turn and records the strike exactly once.
+    // After the backoff the owed retry is attempted; the refusal keeps it owed.
+    h.clock.now += 30_000;
     await sweeper.sweepOnce();
-    const recovered = await h.store.get('s1');
-    expect(recovered).toMatchObject({ status: 'running', runs: 0, consecutiveErrors: 1, lastVerifiedTurnAt: 500 });
+    expect(attempts).toBe(1);
+    expect(h.dispatched).toHaveLength(0);
+    expect((await h.store.get('s1'))?.pendingContinuation).toBe(true);
+
+    refuse = false;
+    await sweeper.sweepOnce();
     expect(h.dispatched).toHaveLength(1);
 
     // And the strike is not double-counted on a further sweep.
     await sweeper.sweepOnce();
     expect((await h.store.get('s1'))?.consecutiveErrors).toBe(1);
+    expect(h.dispatched).toHaveLength(1);
   });
 
   it('a successful turn resets the strike count and clears the stale error note', async () => {
@@ -423,13 +494,18 @@ describe('createAgyGoalSweeper — provider-error strikes (contract 1.58.3)', ()
     const sweeper = createAgyGoalSweeper(h.deps);
     h.turns.set('s1', { completedAt: 100, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
     await sweeper.sweepOnce();
+    h.clock.now += 30_000;
+    await sweeper.sweepOnce(); // the owed retry
     h.turns.set('s1', { completedAt: 200, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
     await sweeper.sweepOnce();
+    h.clock.now += 90_000;
+    await sweeper.sweepOnce(); // the second owed retry
     h.turns.set('s1', { completedAt: 300, response: 'still working on the goal' });
     await sweeper.sweepOnce();
 
     const after = await h.store.get('s1');
     expect(after).toMatchObject({ status: 'running', runs: 1, consecutiveErrors: 0, lastVerifiedTurnAt: 300 });
+    expect(after?.retryNotBefore).toBeUndefined();
     expect(after?.lastReason ?? null).toBeNull();
     expect(h.dispatched).toHaveLength(3); // 2 retries + the ordinary unmet continuation
   });
@@ -437,21 +513,34 @@ describe('createAgyGoalSweeper — provider-error strikes (contract 1.58.3)', ()
   it('resume re-arms: a resumed goal starts a fresh strike cycle', async () => {
     const h = await harness({ s1: record({ maxRuns: 40 }) });
     const sweeper = createAgyGoalSweeper(h.deps);
-    for (const at of [100, 200, 300]) {
+    for (const [index, at] of [100, 200, 300].entries()) {
       h.turns.set('s1', { completedAt: at, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
       await sweeper.sweepOnce();
+      if (index < 2) {
+        // Each transient strike's retry lands once its backoff has elapsed.
+        h.clock.now += AGY_GOAL_TRANSIENT_BACKOFF_MS[index];
+        await sweeper.sweepOnce();
+      }
     }
     expect((await h.store.get('s1'))?.status).toBe('paused');
+    expect(h.dispatched).toHaveLength(2); // the two in-cycle retries before the pause
 
     // Exactly what the route's resume action patches (sessions.ts): status running,
-    // pause reason cleared, auto-continue armed again.
-    await h.store.patch('s1', { status: 'running', pausedReason: undefined, autoContinue: true });
+    // pause reason cleared, auto-continue armed again, backoff and strikes cleared.
+    await h.store.patch('s1', AGY_GOAL_RESUME_PATCH);
     h.turns.set('s1', { completedAt: 400, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
+    h.clock.now += 1_000;
     await sweeper.sweepOnce();
 
     const after = await h.store.get('s1');
+    // The resumed cycle's strike 1 backs off rather than pausing again...
     expect(after).toMatchObject({ status: 'running', consecutiveErrors: 1 });
-    expect(h.dispatched).toHaveLength(3); // the resumed cycle's strike 1 retries rather than re-pausing
+    expect(after?.retryNotBefore).toBeDefined();
+    expect(h.dispatched).toHaveLength(2);
+    // ...and its retry lands like any other transient strike.
+    h.clock.now += AGY_GOAL_TRANSIENT_BACKOFF_MS[0];
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(3);
   });
 
   it('classifies by the reader truth, not response text: a done turn mentioning an error is an ordinary turn', async () => {
@@ -471,6 +560,158 @@ describe('createAgyGoalSweeper — provider-error strikes (contract 1.58.3)', ()
 
     const after = await h.store.get('s1');
     expect(after).toMatchObject({ status: 'running', runs: 1, consecutiveErrors: 0 });
+  });
+
+  it('keeps today\'s behaviour for unclassified errors: the continuation goes out at once, then the strike is recorded', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: 'boom', status: 'error', error: 'boom' });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+
+    expect(h.dispatched).toHaveLength(1);
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', runs: 0, consecutiveErrors: 1, lastVerifiedTurnAt: 500 });
+    expect(after?.retryNotBefore).toBeUndefined();
+    expect(after?.pendingContinuation).toBeFalsy();
+  });
+
+  it('classification uses only the failure error text, never assistant prose in the response', async () => {
+    // An error turn whose response body quotes quota prose but whose actual error
+    // is a plain stall must keep the unclassified behaviour.
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_QUOTA, status: 'error', error: 'stall' });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+
+    expect(h.dispatched).toHaveLength(1);
+    expect(await h.store.get('s1')).toMatchObject({ status: 'running', consecutiveErrors: 1 });
+  });
+});
+
+// ─── quota exhausted vs temporary server error (lane C) ──────────────────────
+
+describe('createAgyGoalSweeper — quota exhausted stops the goal at once', () => {
+  it('pauses on the FIRST quota strike instead of retrying, with a reason that names the class', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_QUOTA, status: 'error', error: AGY_QUOTA });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'paused', pausedReason: 'error', runs: 0, lastVerifiedTurnAt: 500 });
+    expect(after?.lastReason).toMatch(/quota/i);
+    expect(after?.lastReason).toContain(AGY_QUOTA);
+    // Nothing is retried: retrying cannot help until the quota resets.
+    expect(h.dispatched).toHaveLength(0);
+    expect(after?.consecutiveErrors ?? 0).toBe(0);
+    expect(after?.retryNotBefore).toBeUndefined();
+    expect(h.events.map((e) => e.event.type)).toEqual(['goal_state']);
+    expect(h.events[0].event.data).toMatchObject({ status: 'paused', pausedReason: 'error' });
+
+    // A later sweep dispatches nothing for the paused goal.
+    h.clock.now += 10 * 60_000;
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+    expect(h.dispatched).toHaveLength(0);
+  });
+
+  it('includes the reset time in lastReason when the error text states one', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_QUOTA_WITH_RESET, status: 'error', error: AGY_QUOTA_WITH_RESET });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after?.status).toBe('paused');
+    expect(after?.lastReason).toContain('2026-11-22T09:30:00.000Z');
+    expect(h.dispatched).toHaveLength(0);
+  });
+
+  it('never invents a reset time: a quota text without one pauses with no instant in the reason', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_QUOTA, status: 'error', error: AGY_QUOTA });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+
+    const reason = String((await h.store.get('s1'))?.lastReason ?? '');
+    expect(reason).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+    expect(reason).not.toMatch(/resets at/i);
+  });
+
+  it('a 429 without RESOURCE_EXHAUSTED backs off as transient rather than pausing the goal', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    const text = 'RATE_LIMITED (code 429): too many requests';
+    h.turns.set('s1', { completedAt: 500, response: text, status: 'error', error: text });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', consecutiveErrors: 1 });
+    expect(after?.retryNotBefore).toBeDefined();
+    expect(after?.lastReason).toMatch(/transient/);
+  });
+
+  it('a transient 503 never pauses at strike 1 (it waits instead)', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_503, status: 'error', error: AGY_H2S_ERROR_503 });
+    await createAgyGoalSweeper(h.deps).sweepOnce();
+    expect((await h.store.get('s1'))?.status).toBe('running');
+  });
+});
+
+describe('createAgyGoalSweeper — transient backoff safety', () => {
+  it('two overlapping sweeps dispatch the owed retry at most once', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    const sweeper = createAgyGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+
+    h.clock.now += 30_000;
+    await Promise.all([sweeper.sweepOnce(), sweeper.sweepOnce()]);
+    expect(h.dispatched).toHaveLength(1);
+    expect((await h.store.get('s1'))?.pendingContinuation).toBeFalsy();
+  });
+
+  it('a manual resume clears the backoff and the strike count, dispatching the owed retry immediately', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    const sweeper = createAgyGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+    expect((await h.store.get('s1'))?.consecutiveErrors).toBe(1);
+
+    // The route's resume patch: re-armed, fresh strike window, no backoff left.
+    await h.store.patch('s1', AGY_GOAL_RESUME_PATCH);
+    await sweeper.sweepOnce();
+
+    expect(h.dispatched).toHaveLength(1);
+    const after = await h.store.get('s1');
+    expect(after).toMatchObject({ status: 'running', consecutiveErrors: 0 });
+    expect(after?.retryNotBefore).toBeUndefined();
+  });
+
+  it('re-checks the record before dispatching: a pause that lands during the turn read wins over an owed retry', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    const sweeper = createAgyGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+    h.clock.now += 30_000;
+
+    const read = h.deps.readLastCompletedTurn;
+    h.deps.readLastCompletedTurn = async (id) => {
+      const turn = await read(id);
+      await h.store.patch(id, { status: 'paused', pausedReason: 'user', autoContinue: false });
+      return turn;
+    };
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(0);
+  });
+
+  it('a newer completed turn supersedes an owed retry (no stale dispatch)', async () => {
+    const h = await harness({ s1: record({ maxRuns: 40 }) });
+    h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
+    const sweeper = createAgyGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+    h.clock.now += 30_000;
+
+    h.turns.set('s1', { completedAt: 600, response: 'back to work' });
+    await sweeper.sweepOnce();
+    // The newer successful turn was processed (run consumed) and its own
+    // continuation dispatched — exactly one message, not the stale retry plus it.
+    expect(h.dispatched).toHaveLength(1);
+    expect(await h.store.get('s1')).toMatchObject({ runs: 1, lastVerifiedTurnAt: 600, consecutiveErrors: 0 });
   });
 });
 
@@ -493,7 +734,12 @@ describe('createAgyGoalSweeper — server cut-off turns (ceiling fix)', () => {
   it('an ordinary provider error does not claim a cut-off', async () => {
     const h = await harness({ s1: record({ maxRuns: 40 }) });
     h.turns.set('s1', { completedAt: 500, response: AGY_H2S_ERROR_500, status: 'error', error: AGY_H2S_ERROR_500 });
-    await createAgyGoalSweeper(h.deps).sweepOnce();
+    const sweeper = createAgyGoalSweeper(h.deps);
+    await sweeper.sweepOnce();
+    // A transient provider error is retried after its backoff, not instantly.
+    h.clock.now += AGY_GOAL_TRANSIENT_BACKOFF_MS[0];
+    await sweeper.sweepOnce();
+    expect(h.dispatched).toHaveLength(1);
     expect(h.dispatched[0].message).not.toMatch(/cut off/i);
   });
 
