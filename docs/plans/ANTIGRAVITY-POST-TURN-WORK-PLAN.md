@@ -77,7 +77,25 @@ for that). You have my permission to restart it as well."
 | Item | Since | Ref |
 |---|---|---|
 
+## R1 findings (2026-11-22 01:30 UTC, parent-verified from agy's own transcripts and the server journal)
+
+- **T1 (90 s native background task) and T2 (60 s `schedule` timer): no wrong outcome.** agy 1.5.14 answers early
+  inside the turn ("STARTED") but does not emit its stream `result` until the pending task or timer has finished and it
+  has replied ("DONE"); the run receipt ends after the work and the follow-up work is stored. The "parent told finished
+  early" failure seen in the archive does not reproduce on current agy. **Lane A is dropped** (rule criterion 2 fails).
+- **T3 (33-min native background task): wrong outcome.** agy held the turn silently; after 15 minutes without events the
+  Internal API run watchdog declared `TURN_STALLED` and aborted the turn, killing agy and the background command
+  (journal 01:23:15). The stream process's own 30-min tool-stall timer would have killed it next. **Lane B (rewritten):**
+  a known, running agy background task keeps its turn alive against both idle rules; the hard ceilings stay.
+- **The between-turns idle timer and the session eviction path are not changed**: no live failure, because agy keeps
+  the turn open while work is pending (advisor point 3 recorded, not built).
+- A model-chosen `nohup … &` daemon (T1B) never wrote its marker: agy-side behaviour, out of scope.
+- The queued-prompt race probe (T4) is dropped: agy emits one `result` per turn even across a self-wake, so the FIFO
+  head is not consumed early on current agy.
+
 ## Decision log
+- 2026-11-22 R1: lane A dropped; lane B rewritten as "known background work keeps the turn alive"; lane C accepted
+  with fixes (contract 1.70.0 bump + Agent OS mirror delegated to a contract lane); P4 re-runs T3 after the restart.
 
 - 2026-11-22 P1c: critical advisor (GPT-6.1 Terra) — accepted: classify only failed-turn envelopes, persist backoff (`retryNotBefore`) against overlapping sweeps, add a queued-prompt race probe (T4) and a no-work control, verify probes against agy's own transcript; lifecycle option (a) only if settle signals prove reliable, else surface pending state and gate goals/watchers on it; idle guard covers the service eviction path too.
 - 2026-11-22 P0: plan written from `claude:6d0291e5` items 33 and 53; probes and lane C start in parallel.
