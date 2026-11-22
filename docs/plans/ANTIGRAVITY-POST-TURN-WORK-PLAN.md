@@ -93,7 +93,21 @@ for that). You have my permission to restart it as well."
 - The queued-prompt race probe (T4) is dropped: agy emits one `result` per turn even across a self-wake, so the FIFO
   head is not consumed early on current agy.
 
+## P4 finding and correction (2026-11-22 02:40 UTC)
+
+- The P4 re-run of T3 on the restarted production (lane B live) was again ended `TURN_STALLED` at 15 min. Root cause
+  from agy 1.5.14's raw stream: it no longer prints "Tool is running as a background task …" on the stream; a demoted
+  command is one `run_command` step that stays `ACTIVE` until the command ends. Lane B keyed on that banner, so it
+  never fired. **Lane B2** makes the watchdog also defer while the live stream has a tool step in flight (already
+  tracked as `activeToolSteps`). Lane B's banner path stays for agy versions that print it.
+- Bound kept on purpose: a silent tool is still cut by the stream's 30-min tool-stall timer
+  (`ANTIGRAVITY_TOOL_STALL_TIMEOUT_MS`) and the 60-min hard turn timer. The post-B2 live check therefore uses a
+  20-minute command (between the 15-min watchdog and the 30-min tool stall).
+- Unscheduled follow-ups (not built): on agy 1.5.14 the browser's background-task strip no longer shows demoted
+  commands (same banner change); raising the tool-stall cap above 30 min if longer silent commands turn out to matter.
+
 ## Decision log
+- 2026-11-22 P4: lane B did not fix the live failure (banner absent on agy 1.5.14); lane B2 dispatched.
 - 2026-11-22 R1: lane A dropped; lane B rewritten as "known background work keeps the turn alive"; lane C accepted
   with fixes (contract 1.70.0 bump + Agent OS mirror delegated to a contract lane); P4 re-runs T3 after the restart.
 
