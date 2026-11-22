@@ -79,4 +79,5 @@ for that). You have my permission to restart it as well."
 
 ## Decision log
 
+- 2026-11-22 P1c: critical advisor (GPT-6.1 Terra) — accepted: classify only failed-turn envelopes, persist backoff (`retryNotBefore`) against overlapping sweeps, add a queued-prompt race probe (T4) and a no-work control, verify probes against agy's own transcript; lifecycle option (a) only if settle signals prove reliable, else surface pending state and gate goals/watchers on it; idle guard covers the service eviction path too.
 - 2026-11-22 P0: plan written from `claude:6d0291e5` items 33 and 53; probes and lane C start in parallel.
