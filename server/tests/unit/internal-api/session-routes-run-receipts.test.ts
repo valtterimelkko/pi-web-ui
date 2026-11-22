@@ -7,6 +7,7 @@ import os from 'node:os';
 import { createSessionRoutes, type SessionRoutesDeps } from '../../../src/internal-api/routes/sessions.js';
 import { RunReceiptManager } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
+import { AgyProviderTurnError } from '../../../src/antigravity/antigravity-service.js';
 
 function jsonReq(method: string, url: string, body?: unknown): IncomingMessage {
   const req = new PassThrough() as IncomingMessage;
@@ -77,6 +78,7 @@ describe('Internal API run receipt integration', () => {
   let dir: string;
   let registry: any;
   let claudeService: any;
+  let antigravityService: any;
   let multiSessionManager: ReturnType<typeof createMultiSessionManagerMock>;
   let manager: RunReceiptManager;
   let routes: ReturnType<typeof createSessionRoutes>;
@@ -106,6 +108,12 @@ describe('Internal API run receipt integration', () => {
       unpinSession: vi.fn(() => true),
       abort: vi.fn(),
     };
+    antigravityService = {
+      isRunning: vi.fn(() => false),
+      hasSession: vi.fn(() => true),
+      abort: vi.fn(),
+      sendPrompt: vi.fn(),
+    };
     multiSessionManager = createMultiSessionManagerMock();
     manager = new RunReceiptManager({ store: new RunReceiptStore(dir), idFactory: (() => {
       let n = 0;
@@ -115,7 +123,7 @@ describe('Internal API run receipt integration', () => {
     routes = createSessionRoutes({
       claudeService,
       opencodeService: { isRunning: vi.fn(() => false), abort: vi.fn() } as any,
-      antigravityService: { isRunning: vi.fn(() => false), abort: vi.fn() } as any,
+      antigravityService,
       multiSessionManager: multiSessionManager as unknown as SessionRoutesDeps['multiSessionManager'],
       sessionRegistry: registry,
       piService: { setModel: vi.fn().mockResolvedValue(undefined) } as any,
@@ -128,6 +136,34 @@ describe('Internal API run receipt integration', () => {
   afterEach(async () => {
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
   });
+
+  /** Drive one failing Antigravity prompt and assert the receipt's errorCode. */
+  async function runFailingAntigravityTurn(failure: Error, expectedCode: string): Promise<void> {
+    registry.get.mockResolvedValue(entry({ sdkType: 'antigravity', claudeProfileId: undefined, model: 'gemini-3.8-flash-high' }));
+    registry.listAll.mockResolvedValue([entry({ sdkType: 'antigravity', model: 'gemini-3.8-flash-high' })]);
+    antigravityService.sendPrompt.mockImplementationOnce(async (
+      sessionId: string,
+      _message: string,
+      onEvent: (event: unknown) => void,
+      onComplete: (error?: Error) => void,
+    ) => {
+      onEvent({ type: 'agent_start', sessionId, timestamp: Date.now(), data: {} });
+      onComplete(failure);
+    });
+
+    const response = mockRes();
+    await routes.handleSendPrompt(
+      jsonReq('POST', '/api/v1/sessions/session-1/prompt', { message: 'fail this turn' }),
+      response,
+      'session-1',
+    );
+    const body = JSON.parse(response.body);
+    expect(antigravityService.sendPrompt).toHaveBeenCalledTimes(1);
+
+    const lookup = mockRes();
+    await routes.handleGetRunReceipt(jsonReq('GET', `/api/v1/runs/${body.runId}`), lookup, body.runId);
+    expect(JSON.parse(lookup.body)).toMatchObject({ status: 'failed', errorCode: expectedCode });
+  }
 
   it('returns a runId and deduplicates a retry without invoking the runtime twice', async () => {
     const firstResponse = mockRes();
@@ -322,6 +358,18 @@ describe('Internal API run receipt integration', () => {
     const lookup = mockRes();
     await routes.handleGetRunReceipt(jsonReq('GET', `/api/v1/runs/${body.runId}`), lookup, body.runId);
     expect(JSON.parse(lookup.body)).toMatchObject({ status: 'failed', errorCode: 'RUNTIME_ERROR' });
+  });
+
+  it('names a quota-exhausted Antigravity failure on the receipt instead of RUNTIME_ERROR (lane C)', async () => {
+    await runFailingAntigravityTurn(new AgyProviderTurnError('agy ERROR', 'quota'), 'PROVIDER_QUOTA_EXHAUSTED');
+  });
+
+  it('names a temporarily-unavailable Antigravity failure on the receipt (lane C)', async () => {
+    await runFailingAntigravityTurn(new AgyProviderTurnError('agy ERROR', 'transient'), 'PROVIDER_TRANSIENT');
+  });
+
+  it('keeps RUNTIME_ERROR for an unclassified Antigravity failure (unchanged behaviour)', async () => {
+    await runFailingAntigravityTurn(new Error('stall'), 'RUNTIME_ERROR');
   });
 
   it('does not close a successful stream before its terminal receipt reaches durable storage', async () => {

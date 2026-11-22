@@ -89,6 +89,14 @@ export const ErrorCode = {
   // Contract 1.61.0: a Claude SDK profile is at its maxConcurrent cap; refused before any run receipt.
   PROFILE_CAPACITY_EXHAUSTED: 'PROFILE_CAPACITY_EXHAUSTED',
   PROVIDER_NOT_ALLOWED: 'PROVIDER_NOT_ALLOWED',
+  // Lane C (agy-post-turn): an Antigravity turn failed because the provider's
+  // quota is exhausted (`RESOURCE_EXHAUSTED`). Retrying cannot help until the
+  // quota resets, so the parent is told to stop rather than retry — distinct
+  // from the generic RUNTIME_ERROR a provider failure used to report.
+  PROVIDER_QUOTA_EXHAUSTED: 'PROVIDER_QUOTA_EXHAUSTED',
+  // Lane C: an Antigravity turn failed with a temporarily unavailable provider
+  // (Google 500/503/502/504). Worth retrying after a backoff, not stopping.
+  PROVIDER_TRANSIENT: 'PROVIDER_TRANSIENT',
   // Contract 1.46.0: only the Claude Agent SDK backend may execute through the
   // Internal API; direct CLI (`claude -p`) and channel-backed Claude are refused.
   CLAUDE_BACKEND_NOT_ALLOWED: 'CLAUDE_BACKEND_NOT_ALLOWED',
@@ -425,6 +433,20 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
     hint: 'Respect Retry-After, read claudeProfiles in GET /api/v1/capacity (profileId, maxConcurrent, active), and retry later or use a session on another profile.',
     docs: 'docs/INTERNAL-API.md#execution-admission-and-capacity',
   },
+  [ErrorCode.PROVIDER_QUOTA_EXHAUSTED]: {
+    httpStatus: 429,
+    description: 'The model provider reported its quota exhausted (RESOURCE_EXHAUSTED) for the session\'s model.',
+    cause: 'Antigravity forwarded the provider quota envelope: the account or model has no remaining quota. Retrying cannot help until the quota resets.',
+    hint: 'Wait for the provider quota reset (the failed turn\'s agent_end may carry resetAt) or switch the session to another model; do not retry in a loop.',
+    docs: 'docs/INTERNAL-API-CONTRACT.md',
+  },
+  [ErrorCode.PROVIDER_TRANSIENT]: {
+    httpStatus: 503,
+    description: 'The model provider was temporarily unavailable for the session\'s model (Google 500/502/503/504).',
+    cause: 'Antigravity forwarded a transient provider envelope (INTERNAL 500, UNAVAILABLE 503, 502, 504): the same request can succeed later.',
+    hint: 'Retry after a backoff (the goal sweeper waits 30 s on the first strike and 90 s on the second); do not retry instantly.',
+    docs: 'docs/INTERNAL-API-CONTRACT.md',
+  },
   [ErrorCode.PROVIDER_NOT_ALLOWED]: {
     httpStatus: 403,
     description: 'The selected Pi provider is disabled for Internal API agent execution.',
@@ -580,4 +602,13 @@ export function enrichedErrorBody(
   message: string,
 ): { error: string; code: string; hint?: string; docs?: string } {
   return buildErrorBody(code, message, { hint: true, docs: true });
+}
+
+/**
+ * Map a classified provider failure to its wire code (lane C). Only quota and
+ * transient have their own meaning for a consumer; an unclassified failure
+ * keeps the pre-existing `RUNTIME_ERROR`, so this function takes no `other`.
+ */
+export function providerErrorCodeFor(kind: 'quota' | 'transient'): ErrorCode {
+  return kind === 'quota' ? ErrorCode.PROVIDER_QUOTA_EXHAUSTED : ErrorCode.PROVIDER_TRANSIENT;
 }

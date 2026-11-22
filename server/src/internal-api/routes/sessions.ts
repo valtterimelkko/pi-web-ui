@@ -13,7 +13,7 @@ import { projectDefaultViewFromEvents, renderScreenViewMarkdown } from '@pi-web-
 import { detectPromptInjection } from '../../security/prompt-injection.js';
 import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
-import type { AntigravityService } from '../../antigravity/antigravity-service.js';
+import { AgyProviderTurnError, type AntigravityService } from '../../antigravity/antigravity-service.js';
 import type { MultiSessionManager } from '../../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../../session-registry.js';
 import type { RegistryEntry } from '../../session-registry.js';
@@ -108,7 +108,7 @@ import {
   writeFullEvent,
 } from '../event-filter.js';
 import { createSSEStream } from '../sse-stream.js';
-import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
+import { ErrorCode, enrichedErrorBody, providerErrorCodeFor } from '../error-codes.js';
 import { formatPreflightProblem, preflightSpecSchema, resolveEffectiveCreateCwd, runDispatchPreflight, runtimeChildPathEnv } from '../dispatch-preflight.js';
 import { DEFAULT_DRAIN_RETRY_AFTER_SECONDS } from '../drain-controller.js';
 import { readBoundedJsonBody as readJsonBody, RequestBodyTooLargeError } from '../request-body.js';
@@ -286,6 +286,10 @@ function runtimeErrorCode(error: Error, runtime: SessionRuntime): ErrorCode {
   // Code path reports the computed code instead of the hard-coded RUNTIME_ERROR.
   if (error instanceof RunTransportLostError) return ErrorCode.RUN_TRANSPORT_LOST;
   if (runtime !== 'commandcode') {
+    // Lane C (agy-post-turn): an Antigravity turn that failed because the
+    // provider's quota is exhausted or the provider is temporarily unavailable
+    // is named as such on the run receipt, instead of the generic RUNTIME_ERROR.
+    if (error instanceof AgyProviderTurnError) return providerErrorCodeFor(error.errorClass);
     if (error instanceof PromptNotExecutedError) return ErrorCode.PROMPT_NOT_EXECUTED;
     if (error instanceof GoalActionNotAppliedError) return ErrorCode.GOAL_ACTION_NOT_APPLIED;
     // Contract 1.48.0 (B3a) + 1.50.0 (B3b): the streaming tool-argument and
