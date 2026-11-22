@@ -16,6 +16,7 @@ In session `1e2b515d-4271-41b6-a1c6-7dd61b8b0aba` (native agy conversation `1de6
 2. **Turn Cessation**: The model emitted a brief notification: *"I am searching for the notification ID in the server logs."* and ended its active turn.
 3. **UI Blindspot**: In the Web UI, `agent_end` fired. The composer showed "Awaiting Input". There was zero indication that a background command was executing on the host.
 4. **Completion Silence**: `task-3134` exited with code 0 and wrote its pass receipt into `.system_generated/messages/6cdb3728-ceb3-4cae-b0f7-b2f42e7858e1.json`. But in headless `stream-json` mode, `agy` does not autonomously re-prompt itself when a background task finishes. The turn stayed silent, leaving the user with an idle composer and uncommitted changes.
+   > **Superseded 2026-11-22 (agy 1.5.14, live-probed):** agy now keeps the stream turn open while its background task runs and replies after it finishes; it also no longer prints the "running as a background task" banner on the stream. See [ANTIGRAVITY-POST-TURN-WORK-PLAN.md](ANTIGRAVITY-POST-TURN-WORK-PLAN.md).
 
 ### 1.2 The Session Discovery & Archiving Flood
 When `SessionWatcher` and native discovery (`Resume CLI Session` feature) were introduced, `scanNativeSessions` scanned disk paths under `/root/.pi/agent/sessions/--*--` and indexed 545 historical CLI sessions into `session-registry.json` (`origin: 'native-discovered'`).

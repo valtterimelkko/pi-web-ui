@@ -1,6 +1,6 @@
 # Antigravity post-turn work and error storms — plan
 
-**Status:** in execution (started 2026-11-22). **Owner:** Valtteri. **Parent:** Claude Code session `cd78fe71`.
+**Status:** complete (2026-11-22, 04:05 UTC). Deployed to production at contract 1.70.0 (master `df150997`). **Owner:** Valtteri. **Parent:** Claude Code session `cd78fe71`.
 **Operations folder (state, briefs, hand-backs):** `/root/orch-ops/agy-post-turn-20261122/` (`STATE.md` is the live state).
 
 ## Intent
@@ -106,7 +106,26 @@ for that). You have my permission to restart it as well."
 - Unscheduled follow-ups (not built): on agy 1.5.14 the browser's background-task strip no longer shows demoted
   commands (same banner change); raising the tool-stall cap above 30 min if longer silent commands turn out to matter.
 
+## Outcome (R3, 2026-11-22 04:05 UTC)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Lane C — provider error classes | Live since 02:11 UTC: quota pauses a goal at once; 500/503 back off 30 s / 90 s (`retryNotBefore`, survives restart); run receipts carry `PROVIDER_QUOTA_EXHAUSTED` / `PROVIDER_TRANSIENT`; failed-turn `agent_end` carries `errorClass`/`resetAt`. Contract 1.70.0, Agent OS mirror in step. | unit tests; Sonnet review ACCEPT WITH FIXES (fixes = contract bump, done); no live error injection (cannot force a real quota error cheaply) |
+| Lanes B + B2 — known pending work keeps an agy turn alive | Live since 03:37 UTC. P4c: a 20-minute background command ran to completion; receipt `completed`, `finalText` "STARTED\nDONE", marker written; journal shows the watchdog's idle rule deferred instead of `TURN_STALLED`. Before the fix (T3, P4) the same shape was killed at 15 min. | probe/P4C-T3S timeline; journal 03:42–03:58 |
+| Lane A — "told finished early" | Dropped: does not reproduce on agy 1.5.14 (T1, T2, P4-T1). | probe results |
+
+Limits kept on purpose: a silent agy tool is still cut by the stream tool-stall (30 min) and the hard turn timer
+(60 min); the receipt `turnMaxMs` (6 h) is unchanged.
+
+Unscheduled follow-ups (recorded, not built):
+- The deferral info log fires every 10 s while a run is deferred (the watchdog ticks every second; "every 10th"
+  deferral); make it time-based (e.g. once a minute) and say "tool in flight" when that is the reason.
+- On agy 1.5.14 the browser's background-task strip no longer shows demoted commands (banner gone from the stream).
+- Raise the 30-min silent-tool cap only if longer silent commands turn out to matter.
+- Re-run T1, T3S and the raw-wire capture after an agy version jump (agy updates itself).
+
 ## Decision log
+- 2026-11-22 R3: P4c passed; programme closed; September §1.1 note marked superseded.
 - 2026-11-22 P4: lane B did not fix the live failure (banner absent on agy 1.5.14); lane B2 dispatched.
 - 2026-11-22 R1: lane A dropped; lane B rewritten as "known background work keeps the turn alive"; lane C accepted
   with fixes (contract 1.70.0 bump + Agent OS mirror delegated to a contract lane); P4 re-runs T3 after the restart.
