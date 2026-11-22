@@ -64,6 +64,19 @@ export interface AgyStreamProcessOptions {
    *  silence one. Defaults to `stallTimeoutMs` (the pre-fix behaviour). */
   toolStallTimeoutMs?: number;
   idleTimeoutMs: number;
+  /**
+   * Lane B (2026-11-22): does the owning service still track running background
+   * work for this session?
+   *
+   * agy 1.5.14 demotes a long `run_command` to a background task instantaneously
+   * ("Tool is running as a background task with task id: …"), answers STARTED
+   * and then emits NOTHING on the stream until that task finishes — live-probed
+   * at 90 s, 60 s and 33 min. That silence is indistinguishable from a hang on
+   * the wire, so when the service can vouch for it the stall clock re-arms
+   * instead of SIGTERMing the process. The per-turn hard ceiling below is never
+   * deferred. Absent, false or throwing → today's SIGTERM stall path.
+   */
+  hasPendingBackgroundWork?: () => boolean;
   /** Every parsed stdout line (the service feeds its AgyEventNormalizer). */
   onEvent: (parsed: ParsedAgyLine) => void;
   spawnFn?: typeof spawn;
@@ -93,6 +106,8 @@ export class AgyStreamProcess {
    *  process is unusable from this instant and the service respawns. */
   private terminating = false;
   private stderrSampleCount = 0;
+  /** Lane B: stall windows deferred for known background work in the current turn. */
+  private stallDeferrals = 0;
   private _conversationId: string | null = null;
   private _permissionMode: string | null = null;
 
@@ -239,6 +254,7 @@ export class AgyStreamProcess {
     const head = this.pending.shift();
     if (head?.hardTimer) clearTimeout(head.hardTimer);
     this.activeToolSteps.clear();
+    this.stallDeferrals = 0;
     if (!head) return;
     const result = parsed.result;
     head.resolve({
@@ -346,12 +362,41 @@ export class AgyStreamProcess {
     const windowMs = this.currentStallWindowMs();
     this.stallTimer = setTimeout(() => {
       if (this.pending.length === 0 || this.exited) return;
+      if (this.backgroundWorkExplainsSilence()) {
+        // Lane B: the silence is a background task we are tracking, not a hang.
+        // Re-arm and keep the turn open; the hard ceiling, the runtime's own
+        // watch ceiling and abort/delete still bound it.
+        this.stallDeferrals += 1;
+        if (this.stallDeferrals === 1 || this.stallDeferrals % 10 === 0) {
+          logger.info(
+            'no stream events for %dms%s; stall deferred (deferral %d): a background task is still running',
+            windowMs,
+            this.activeToolSteps.size > 0 ? ' with a tool in flight' : '',
+            this.stallDeferrals,
+          );
+        }
+        this.armStallTimer();
+        return;
+      }
       logger.warn('no stream events for %dms%s; SIGTERM (stall)', windowMs, this.activeToolSteps.size > 0 ? ' with a tool in flight' : '');
       this.terminating = true;
       this.child?.kill('SIGTERM');
       this.resolveAllPendingWithReason('stall');
     }, windowMs);
     if (typeof this.stallTimer.unref === 'function') this.stallTimer.unref();
+  }
+
+  /** Lane B: the service's own tracking says this silence is explained work. A
+   *  missing or throwing predicate is "no evidence", so the stall path stands. */
+  private backgroundWorkExplainsSilence(): boolean {
+    const predicate = this.opts.hasPendingBackgroundWork;
+    if (!predicate) return false;
+    try {
+      return predicate() === true;
+    } catch (error) {
+      logger.warn('pending-background-work predicate threw: %s', error instanceof Error ? error.message : String(error));
+      return false;
+    }
   }
 
   private onActivity(): void {

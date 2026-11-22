@@ -399,6 +399,24 @@ export class InternalApiServer {
         devinService: this.devinService,
         readPiStatus: (sessionPath) => this.multiSessionManager.getSessionStatus(sessionPath),
       }),
+      // Lane B (2026-11-22): a runtime that still tracks a RUNNING background
+      // task is silent by design. agy holds the stream turn open, emitting
+      // nothing, until its own background command finishes (live-probed: a
+      // 33-minute task went quiet for 15 minutes and this watchdog killed the
+      // legitimate command as TURN_STALLED). The watchdog therefore asks the
+      // owning runtime whether the session still has work it knows about, and
+      // defers the IDLE rule only — the absolute ceiling, the runtime's hard
+      // turn timer, the runtime's background watch ceiling and user
+      // abort/delete are untouched. Only Antigravity tracks such work; every
+      // other runtime answers false and keeps today's behaviour.
+      hasKnownPendingWork: (sessionId, runtime) => {
+        if (runtime !== 'antigravity') return false;
+        try {
+          return this.antigravityService.hasRunningBackgroundTasks(sessionId);
+        } catch {
+          return false; // no evidence of pending work: never defer on an error
+        }
+      },
       // C2 (contract 1.57.0): the operator learns a dispatched run never
       // started without polling. The parent-watch firing sink is registered
       // separately by the route layer (it owns the watch manager).
