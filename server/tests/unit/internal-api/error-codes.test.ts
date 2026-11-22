@@ -5,6 +5,7 @@ import {
   ERROR_CODE_INFO,
   buildErrorBody,
   enrichedErrorBody,
+  providerErrorCodeFor,
 } from '../../../src/internal-api/error-codes.js';
 
 describe('Internal API error-code catalog (Task 9)', () => {
@@ -94,6 +95,30 @@ describe('Internal API error-code catalog (Task 9)', () => {
       expect(body.code, code).toBe(code);
       expect(typeof body.hint, `${code} hint`).toBe('string');
       expect((body.hint as string).length, `${code} hint empty`).toBeGreaterThan(0);
+    }
+  });
+});
+
+/**
+ * Lane C (agy-post-turn): a failed Antigravity turn is classified as quota /
+ * transient / other. The first two get their own wire code so a parent can tell
+ * "stop until the quota resets" from "wait, then retry"; `other` keeps the
+ * pre-existing generic `RUNTIME_ERROR`.
+ */
+describe('provider-error codes (lane C)', () => {
+  it('maps a classified provider failure to its own code', () => {
+    expect(providerErrorCodeFor('quota')).toBe('PROVIDER_QUOTA_EXHAUSTED');
+    expect(providerErrorCodeFor('transient')).toBe('PROVIDER_TRANSIENT');
+  });
+
+  it('catalogs both codes as additive entries with their own status and guidance', () => {
+    for (const code of ['PROVIDER_QUOTA_EXHAUSTED', 'PROVIDER_TRANSIENT'] as const) {
+      expect(ALL_ERROR_CODES).toContain(code);
+      const info = ERROR_CODE_INFO[code];
+      expect(info.httpStatus).toBe(code === 'PROVIDER_QUOTA_EXHAUSTED' ? 429 : 503);
+      expect(info.description.length).toBeGreaterThan(0);
+      expect(info.cause.length).toBeGreaterThan(0);
+      expect((info.hint ?? '').length).toBeGreaterThan(0);
     }
   });
 });

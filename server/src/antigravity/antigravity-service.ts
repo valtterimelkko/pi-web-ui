@@ -6,6 +6,7 @@ import { planSpawnOwn, placementForSpawn } from '../placement/index.js';
 import type { NormalizedEvent, ChildCardProjection } from '@pi-web-ui/shared';
 import { AntigravitySessionStore } from './antigravity-session-store.js';
 import { isTurnDone } from './antigravity-session-store.js';
+import { classifyAgyError, type AgyErrorKind } from './agy-error-class.js';
 import { turnsToReplayEvents } from './antigravity-history-replay.js';
 import { loadNativeAntigravityTurns } from './antigravity-native-reader.js';
 import { AntigravitySessionSubscribers } from './antigravity-session-subscribers.js';
@@ -174,6 +175,20 @@ export interface AgyCompletedTurn {
   status: 'done' | 'error';
   /** The error the runtime recorded (present when status === 'error'). */
   error?: string;
+}
+
+/**
+ * A failed agy turn whose provider error class means something to the caller:
+ * the provider's quota is exhausted (stop until it resets) or the provider is
+ * temporarily unavailable (wait, then retry). Thrown/forwarded as the turn's
+ * completion error so the run receipt names the class instead of the generic
+ * `RUNTIME_ERROR`; an unclassified failure stays a plain `Error`.
+ */
+export class AgyProviderTurnError extends Error {
+  constructor(message: string, readonly errorClass: Exclude<AgyErrorKind, 'other'>) {
+    super(message);
+    this.name = 'AgyProviderTurnError';
+  }
 }
 
 /**
@@ -648,7 +663,11 @@ export class AntigravityService {
         : `The agent did not return a reply (${reason}).`;
       tlog.warn('stream turn failed in %dms: reason=%s agyError=%s', durationMs, reason, outcome.error?.slice(0, 120) ?? 'none');
       await this.finalizeStreamError(sessionId, entry, turnId, prompt, isFirstMessage, partial, reason, outcome.error ?? reason, actualConversationId, body, durationMs, normalizer, assistantId, emit, meta);
-      cleanupRunState(new Error(reason));
+      // Lane C: a quota/transient provider failure is forwarded as a typed error
+      // so the run receipt carries PROVIDER_QUOTA_EXHAUSTED / PROVIDER_TRANSIENT;
+      // everything else keeps the pre-existing generic RUNTIME_ERROR.
+      const failureKind = classifyAgyError(outcome.error ?? reason).kind;
+      cleanupRunState(failureKind === 'other' ? new Error(reason) : new AgyProviderTurnError(reason, failureKind));
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       const reason = error.message || 'error';
@@ -784,7 +803,23 @@ export class AntigravityService {
       data: { id: assistantId, assistantMessageEvent: { type: 'text_delta', delta: body } },
     });
     emit({ type: 'message_end', sessionId, timestamp: turnTs, data: { id: assistantId } });
-    emit({ type: 'agent_end', sessionId, timestamp: turnTs, data: { result: null, usage: {}, error: errorText || reason } });
+    // Lane C: the failed turn's provider-error class rides on agent_end
+    // additively, so a parent can tell "stop" (quota) from "wait, then retry"
+    // (transient) without parsing the error text itself. `resetAt` appears only
+    // when the provider text stated one.
+    const providerError = classifyAgyError(errorText || reason);
+    emit({
+      type: 'agent_end',
+      sessionId,
+      timestamp: turnTs,
+      data: {
+        result: null,
+        usage: {},
+        error: errorText || reason,
+        errorClass: providerError.kind,
+        ...(providerError.resetAt ? { resetAt: providerError.resetAt } : {}),
+      },
+    });
 
     meta.status = 'error';
     meta.lastActivity = Date.now();
@@ -893,7 +928,12 @@ export class AntigravityService {
       antigravityConversationId: conversationId ?? undefined,
     });
 
-    emit({ type: 'agent_end', sessionId, timestamp: turnTs, data: { result: null, usage: {} } });
+    emit({ type: 'agent_end', sessionId, timestamp: turnTs, data: {
+      result: null,
+      usage: {},
+      // Lane C: the class of the failure, additively (unchanged for other errors).
+      errorClass: classifyAgyError(reason).kind,
+    } });
 
     meta.status = 'error';
     meta.lastActivity = Date.now();

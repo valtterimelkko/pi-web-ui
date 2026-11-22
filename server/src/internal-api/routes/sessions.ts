@@ -13,7 +13,7 @@ import { projectDefaultViewFromEvents, renderScreenViewMarkdown } from '@pi-web-
 import { detectPromptInjection } from '../../security/prompt-injection.js';
 import type { ClaudeService } from '../../claude/claude-service.js';
 import type { OpenCodeService } from '../../opencode/opencode-service.js';
-import type { AntigravityService } from '../../antigravity/antigravity-service.js';
+import { AgyProviderTurnError, type AntigravityService } from '../../antigravity/antigravity-service.js';
 import type { MultiSessionManager } from '../../pi/multi-session-manager.js';
 import type { SessionRegistryManager } from '../../session-registry.js';
 import type { RegistryEntry } from '../../session-registry.js';
@@ -80,7 +80,7 @@ import { createPeerParentResolver, type PeerParentResolution } from '../parent-r
 import { readClaudeGoalStatuses, projectClaudeGoal, composeClaudeGoalCommand, CLAUDE_GOAL_CONTINUATION_PROMPT, resolveClaudeTranscriptPath, resolveClaudeProjectsRoot } from '../goal/claude-goal.js';
 import { loadClaudeGoalAutoContinueConfig, ClaudeGoalControlStore, GoalSweepReadCache, createClaudeGoalNudger } from '../goal/claude-auto-continue.js';
 import { projectCommandCodeGoal } from '../goal/commandcode-goal.js';
-import { AntigravityGoalControlStore, buildAgyGoalContinuationPrompt, buildAgyGoalStartPrompt, createAgyGoalSweeper, loadAgyGoalAutoContinueConfig, parseAgyGoalCommand, projectAgyGoal, type AgyGoalCommand } from '../goal/antigravity-goal.js';
+import { AGY_GOAL_RESUME_PATCH, AntigravityGoalControlStore, buildAgyGoalContinuationPrompt, buildAgyGoalStartPrompt, createAgyGoalSweeper, loadAgyGoalAutoContinueConfig, parseAgyGoalCommand, projectAgyGoal, type AgyGoalCommand } from '../goal/antigravity-goal.js';
 import { DevinGoalControlStore, buildDevinGoalContinuationPrompt, buildDevinGoalStartPrompt, createDevinGoalSweeper, loadDevinGoalAutoContinueConfig, parseDevinGoalCommand, projectDevinGoal, type DevinGoalCommand } from '../goal/devin-goal.js';
 import { buildGoalBrowserMessages } from '../goal/browser-bridge.js';
 import type { SessionGoalProjection } from '../goal/types.js';
@@ -108,7 +108,7 @@ import {
   writeFullEvent,
 } from '../event-filter.js';
 import { createSSEStream } from '../sse-stream.js';
-import { ErrorCode, enrichedErrorBody } from '../error-codes.js';
+import { ErrorCode, enrichedErrorBody, providerErrorCodeFor } from '../error-codes.js';
 import { formatPreflightProblem, preflightSpecSchema, resolveEffectiveCreateCwd, runDispatchPreflight, runtimeChildPathEnv } from '../dispatch-preflight.js';
 import { DEFAULT_DRAIN_RETRY_AFTER_SECONDS } from '../drain-controller.js';
 import { readBoundedJsonBody as readJsonBody, RequestBodyTooLargeError } from '../request-body.js';
@@ -286,6 +286,10 @@ function runtimeErrorCode(error: Error, runtime: SessionRuntime): ErrorCode {
   // Code path reports the computed code instead of the hard-coded RUNTIME_ERROR.
   if (error instanceof RunTransportLostError) return ErrorCode.RUN_TRANSPORT_LOST;
   if (runtime !== 'commandcode') {
+    // Lane C (agy-post-turn): an Antigravity turn that failed because the
+    // provider's quota is exhausted or the provider is temporarily unavailable
+    // is named as such on the run receipt, instead of the generic RUNTIME_ERROR.
+    if (error instanceof AgyProviderTurnError) return providerErrorCodeFor(error.errorClass);
     if (error instanceof PromptNotExecutedError) return ErrorCode.PROMPT_NOT_EXECUTED;
     if (error instanceof GoalActionNotAppliedError) return ErrorCode.GOAL_ACTION_NOT_APPLIED;
     // Contract 1.48.0 (B3a) + 1.50.0 (B3b): the streaming tool-argument and
@@ -5977,6 +5981,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         completedAt: null,
         clearedAt: undefined,
         consecutiveErrors: 0,
+        // Lane C: a start opens a clean cycle, so no stale transient backoff.
+        retryNotBefore: undefined,
         pendingContinuation: false,
         lastVerifiedTurnAt: undefined,
         autoContinue: raw.autoContinue !== false,
@@ -6018,8 +6024,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         sendJson(res, 409, enrichedErrorBody(ErrorCode.INVALID_REQUEST, 'no goal is armed for this session'));
         return;
       }
-      // A resume opens a fresh provider-error strike window (contract 1.58.3).
-      await agyGoalStore.patch(sessionId, { status: 'running', pausedReason: undefined, autoContinue: true, consecutiveErrors: 0 });
+      // A resume opens a fresh provider-error strike window (contract 1.58.3) and
+      // drops any transient backoff (lane C): an operator who resumes wants the
+      // continuation now, not at the old retry instant.
+      await agyGoalStore.patch(sessionId, AGY_GOAL_RESUME_PATCH);
       let continuationDispatched = false;
       if (!antigravityService.isRunning(sessionId)) {
         const dispatched = await dispatchDetachedInternal(sessionId, buildAgyGoalContinuationPrompt(existing.objective, existing.verifyCommand !== undefined));
