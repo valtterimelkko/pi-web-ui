@@ -154,6 +154,17 @@ describe('Internal API session list filters and fields (contract 1.30.0)', () =>
       expect(body.sessions.map((s: any) => s.runtime).sort()).toEqual(['claude', 'claude', 'commandcode']);
     });
 
+    it('accepts devin as a runtime filter (devin was missing from validRuntimes)', async () => {
+      registry.listAll.mockResolvedValue([
+        entry({ id: 'devin-1', path: 'devin-1', sdkType: 'devin', cwd: '/root/proj', lastActivity: '2026-08-07T00:00:00.000Z' }),
+        entry({ id: 'old-claude', path: 'old-claude', sdkType: 'claude', cwd: '/root/proj', lastActivity: '2026-08-01T00:00:00.000Z' }),
+      ]);
+      const { status, body } = await getList('/api/v1/sessions?runtime=devin');
+      expect(status).toBe(200);
+      expect(body.sessions.map((s: any) => s.sessionId)).toEqual(['devin-1']);
+      expect(body.sessions[0].runtime).toBe('devin');
+    });
+
     it('rejects an unknown runtime with 400 INVALID_REQUEST', async () => {
       const { status, body } = await getList('/api/v1/sessions?runtime=banana');
       expect(status).toBe(400);

@@ -114,6 +114,7 @@ describe('notifications routes', () => {
   let opencode: ReturnType<typeof fakeService>;
   let antigravity: ReturnType<typeof fakeService>;
   let commandcode: ReturnType<typeof fakeService>;
+  let devin: ReturnType<typeof fakeService>;
   let channel: ReturnType<typeof captureChannel>;
   let store: NotificationStore;
   let manager: NotificationManager;
@@ -127,6 +128,7 @@ describe('notifications routes', () => {
     opencode = fakeService();
     antigravity = fakeService();
     commandcode = fakeService();
+    devin = fakeService();
     channel = captureChannel();
     const router = new ChannelRouter();
     router.register(channel);
@@ -135,7 +137,7 @@ describe('notifications routes', () => {
       enabled: true,
       store,
       router,
-      services: { pi, claude, opencode, antigravity, commandcode },
+      services: { pi, claude, opencode, antigravity, commandcode, devin },
       tailMaxChars: 1200,
       publicBaseUrl: 'https://app.example.com',
       debounceMs: 10,
@@ -170,7 +172,7 @@ describe('notifications routes', () => {
     });
 
     it('opts in each runtime and attaches on the sessionId key for non-Pi', async () => {
-      for (const rt of ['claude', 'opencode', 'antigravity'] as const) {
+      for (const rt of ['claude', 'opencode', 'antigravity', 'devin'] as const) {
         registry.get.mockResolvedValue(entry(rt, `id-${rt}`));
         const res = createMockRes();
         await routes.handleOptIn(createJsonReq('POST', `/api/v1/sessions/id-${rt}/notifications/opt-in`), res, `id-${rt}`);
@@ -179,6 +181,7 @@ describe('notifications routes', () => {
       expect(claude.addCalls).toEqual(['id-claude']);
       expect(opencode.addCalls).toEqual(['id-opencode']);
       expect(antigravity.addCalls).toEqual(['id-antigravity']);
+      expect(devin.addCalls).toEqual(['id-devin']);
     });
 
     it('opts in a shadow Command Code session through the registry-owned identity', async () => {

@@ -26,7 +26,7 @@ import type { ActionHandlerRegistry } from '../../notifications/action-handlers.
 
 const logger = createLogger('NotificationsRoutes');
 
-const NOTIFICATION_RUNTIMES: readonly NotificationRuntime[] = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode'];
+const NOTIFICATION_RUNTIMES: readonly NotificationRuntime[] = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode', 'devin'];
 
 function isNotificationRuntime(value: unknown): value is NotificationRuntime {
   return typeof value === 'string' && (NOTIFICATION_RUNTIMES as readonly string[]).includes(value);

@@ -2479,7 +2479,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       const runtimeParam = query.get('runtime');
       if (runtimeParam !== null) {
         const parts = runtimeParam.split(',').map((s) => s.trim()).filter(Boolean);
-        const validRuntimes = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode'];
+        const validRuntimes = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode', 'devin'];
         if (parts.length === 0 || parts.some((p) => !validRuntimes.includes(p))) {
           sendJson(res, 400, { error: `Unsupported runtime filter: ${runtimeParam}. Valid runtimes: ${validRuntimes.join(', ')}`, code: ErrorCode.INVALID_REQUEST });
           return;

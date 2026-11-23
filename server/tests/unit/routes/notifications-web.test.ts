@@ -57,6 +57,25 @@ describe('notifications web router (cookie-auth browser surface)', () => {
     expect(res.body.optIn.runtime).toBe('claude');
   });
 
+  it('POST opt-in accepts a devin session', async () => {
+    const mgr = fakeManager();
+    const app = buildApp(mgr);
+
+    const res = await request(app)
+      .post('/api/sessions/devin-1/notifications/opt-in')
+      .send({ runtime: 'devin', sessionPath: '/d/devin-1' });
+
+    expect(res.status).toBe(200);
+    expect(mgr.optIn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'devin-1',
+        runtime: 'devin',
+        sessionPath: '/d/devin-1',
+      }),
+    );
+    expect(res.body.optIn.runtime).toBe('devin');
+  });
+
   it('POST opt-in rejects an invalid runtime with 400', async () => {
     const app = buildApp(fakeManager());
     const res = await request(app)

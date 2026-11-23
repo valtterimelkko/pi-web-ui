@@ -14,7 +14,7 @@ import { cookieAuthMiddleware } from '../middleware/auth.js';
 import type { NotificationManager } from '../notifications/notification-manager.js';
 import type { NotificationRuntime, OptInRecord } from '../notifications/types.js';
 
-const RUNTIMES: readonly NotificationRuntime[] = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode'];
+const RUNTIMES: readonly NotificationRuntime[] = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode', 'devin'];
 
 export interface NotificationsWebDeps {
   getManager: () => NotificationManager | null;
