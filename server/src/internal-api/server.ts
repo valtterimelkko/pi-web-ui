@@ -75,7 +75,7 @@ import { getHealthTelemetry } from '../observability/health-telemetry.js';
 import { createValidationLeakOverride } from '../observability/admission-leak-override.js';
 import { CommandCodeService } from '../command-code/command-code-service.js';
 import { getDevinService, type DevinService } from '../devin/index.js';
-import { DrainController, composeInterruptedBusySessions, consumeDrainRecord, createBusySessionSource, type DrainBusySession } from './drain-controller.js';
+import { DrainController, composeInterruptedBusySessions, consumeDrainRecord, createBusySessionSource, createDrainBusyRuntimeProbe, type DrainBusySession } from './drain-controller.js';
 import { createDrainRoutes, isExecutionEntryRequest } from './routes/drain.js';
 import type { SessionRuntime } from './types.js';
 
@@ -558,13 +558,13 @@ export class InternalApiServer {
     // snapshot. Pi is always read live, never from the snapshot.
     const busySource = createBusySessionSource({
       listRegistryEntries: () => this.sessionRegistry.listAll().then((all) => all.map((entry) => ({ id: entry.id, sdkType: entry.sdkType }))),
-      isRuntimeRunning: (sdkType, sessionId) => {
-        if (sdkType === 'claude') return this.claudeService.isRunning(sessionId);
-        if (sdkType === 'opencode') return this.opencodeService.isRunning(sessionId);
-        if (sdkType === 'antigravity') return this.antigravityService.isRunning(sessionId);
-        if (sdkType === 'commandcode') return this.commandCodeService.isRunning(sessionId);
-        return false; // 'pi' is covered by the live resident accessor
-      },
+      isRuntimeRunning: createDrainBusyRuntimeProbe({
+        claudeService: this.claudeService,
+        opencodeService: this.opencodeService,
+        antigravityService: this.antigravityService,
+        commandCodeService: this.commandCodeService,
+        devinService: this.devinService,
+      }),
       listPiBusySessions: () => this.multiSessionManager.listBusySessions().map((s) => ({ sessionId: s.sessionId, runtime: 'pi', busyReason: s.busyBecause.join('+') })),
     });
     const listBusySessions = (): DrainBusySession[] => {

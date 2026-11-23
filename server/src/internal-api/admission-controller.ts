@@ -353,7 +353,7 @@ export interface AdmissionControllerOptions {
   now?: () => number;
 }
 
-const RUNTIMES: SessionRuntime[] = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode'];
+const RUNTIMES: SessionRuntime[] = ['pi', 'claude', 'opencode', 'antigravity', 'commandcode', 'devin'];
 const DEFAULT_MINIMUM_HEADROOM_BYTES = 512 * 1024 * 1024;
 const DEFAULT_RESERVED_BYTES_PER_TURN = 512 * 1024 * 1024;
 const DEFAULT_RESERVED_PIDS_PER_TURN = 96;

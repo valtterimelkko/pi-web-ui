@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createBusySessionSource, type BusySessionSources } from '../../../src/internal-api/drain-controller.js';
+import { createBusySessionSource, createDrainBusyRuntimeProbe, type BusySessionSources } from '../../../src/internal-api/drain-controller.js';
 
 /**
  * B4.1 correction 01 (finding 2): the non-Pi busy list must stay current.
@@ -106,5 +106,51 @@ describe('createBusySessionSource (correction 01 — shared in-flight refresh)',
     source.listBusySessions();
     await source.refresh();
     expect(listRegistryEntries.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+/**
+ * Devin drain coverage (2026-11-23 live finding): the server's
+ * isRuntimeRunning probe had no devin branch, so the drain's busy-session
+ * wait and the /capacity runtimes map were blind to the newest runtime —
+ * a drain could settle and restart while a Devin turn was in flight.
+ * The probe is the extracted factory the server wires into
+ * createBusySessionSource; these tests drive THIS, not a copy.
+ */
+describe('createDrainBusyRuntimeProbe', () => {
+  const makeProbe = (overrides: { devinRunning?: (id: string) => boolean; omitDevin?: boolean } = {}) => {
+    const calls: Record<string, string[]> = { claude: [], opencode: [], antigravity: [], commandcode: [], devin: [] };
+    const probe = createDrainBusyRuntimeProbe({
+      claudeService: { isRunning: (id: string) => { calls.claude.push(id); return id === 'claude-1'; } },
+      opencodeService: { isRunning: (id: string) => { calls.opencode.push(id); return id === 'oc-1'; } },
+      antigravityService: { isRunning: (id: string) => { calls.antigravity.push(id); return id === 'agy-1'; } },
+      commandCodeService: { isRunning: (id: string) => { calls.commandcode.push(id); return id === 'cc-1'; } },
+      ...(overrides.omitDevin ? {} : { devinService: { isRunning: overrides.devinRunning ?? ((id: string) => { calls.devin.push(id); return id === 'devin-1'; }) } }),
+    });
+    return { probe, calls };
+  };
+
+  it('reports a running devin session through devinService.isRunning', () => {
+    const { probe, calls } = makeProbe();
+    expect(probe('devin', 'devin-1')).toBe(true);
+    expect(probe('devin', 'devin-2')).toBe(false);
+    expect(calls.devin).toEqual(['devin-1', 'devin-2']);
+  });
+
+  it('reads a missing devinService as not-running (pre-fix behaviour, fail-safe)', () => {
+    const { probe } = makeProbe({ omitDevin: true });
+    expect(probe('devin', 'devin-1')).toBe(false);
+  });
+
+  it('preserves the existing runtime branches and ignores pi/unknown', () => {
+    const { probe, calls } = makeProbe();
+    expect(probe('claude', 'claude-1')).toBe(true);
+    expect(probe('opencode', 'oc-1')).toBe(true);
+    expect(probe('antigravity', 'agy-1')).toBe(true);
+    expect(probe('commandcode', 'cc-1')).toBe(true);
+    expect(probe('pi', 'pi-1')).toBe(false);
+    expect(probe('something-else', 'x')).toBe(false);
+    expect(calls.claude).toEqual(['claude-1']);
+    expect(calls.devin).toEqual([]);
   });
 });

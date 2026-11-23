@@ -63,6 +63,34 @@ describe('AdmissionController', () => {
     lease.release();
   });
 
+  it('counts devin turns in per-runtime capacity and enforces its runtime limit', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 6,
+      interactiveReserve: 1,
+      runtimeMaxActiveTurns: { devin: 1 },
+      memory: () => ({ currentBytes: 100, limitBytes: 10_000 }),
+      minimumHeadroomBytes: 100,
+      reservedBytesPerTurn: 1,
+    });
+    const lease = await controller.acquire('devin');
+    expect(controller.activeCounts().runtimes.devin.activeTurns).toBe(1);
+    expect(controller.snapshot().runtimes.devin).toMatchObject({ activeTurns: 1, maxActiveTurns: 1 });
+    await expect(controller.acquire('devin')).rejects.toMatchObject({ reason: 'runtime_limit' });
+    lease.release();
+    expect(controller.snapshot().runtimes.devin.activeTurns).toBe(0);
+  });
+
+  it('gives devin the apiTurnLimit runtime ceiling by default like the other runtimes', async () => {
+    const controller = new AdmissionController({
+      maxActiveTurns: 6,
+      interactiveReserve: 1,
+      memory: () => ({ currentBytes: 100, limitBytes: 10_000 }),
+      minimumHeadroomBytes: 100,
+      reservedBytesPerTurn: 1,
+    });
+    expect(controller.snapshot().runtimes.devin.maxActiveTurns).toBe(5);
+  });
+
   it('makes release idempotent', async () => {
     const controller = new AdmissionController({
       maxActiveTurns: 2,

@@ -614,6 +614,32 @@ export interface BusySessionSources {
   onWarn?: (message: string) => void;
 }
 
+/** The per-runtime busy probes the drain's `isRuntimeRunning` consults. */
+export interface DrainBusyRuntimeProbeDeps {
+  claudeService: { isRunning: (sessionId: string) => boolean };
+  opencodeService: { isRunning: (sessionId: string) => boolean };
+  antigravityService: { isRunning: (sessionId: string) => boolean };
+  commandCodeService: { isRunning: (sessionId: string) => boolean };
+  /** Devin was missing here until 2026-11-23: drains never waited for it. */
+  devinService?: { isRunning: (sessionId: string) => boolean };
+}
+
+/**
+ * The server's `isRuntimeRunning` probe as a testable factory — the drain
+ * tests drive THIS, not a copy. 'pi' stays false: Pi resident busy sessions
+ * are covered live by `listPiBusySessions`, never from the registry snapshot.
+ */
+export function createDrainBusyRuntimeProbe(deps: DrainBusyRuntimeProbeDeps): (sdkType: string, sessionId: string) => boolean {
+  return (sdkType, sessionId) => {
+    if (sdkType === 'claude') return deps.claudeService.isRunning(sessionId);
+    if (sdkType === 'opencode') return deps.opencodeService.isRunning(sessionId);
+    if (sdkType === 'antigravity') return deps.antigravityService.isRunning(sessionId);
+    if (sdkType === 'commandcode') return deps.commandCodeService.isRunning(sessionId);
+    if (sdkType === 'devin') return deps.devinService?.isRunning(sessionId) ?? false;
+    return false;
+  };
+}
+
 export interface BusySessionSource {
   /** Sync, payload-free busy list: Pi live + non-Pi from the last snapshot. */
   listBusySessions: () => DrainBusySession[];
