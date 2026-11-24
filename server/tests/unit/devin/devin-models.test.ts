@@ -265,6 +265,96 @@ describe('resolveDevinCreateModel (lane D3: create honours the level; family ids
 });
 
 /**
+ * Owner ruling 2026-11-24: SWE-2.1 offers SWE-2's thinking ladder
+ * (medium, high, max) on the Internal API, Wheelhouse and the browser, although
+ * the CLI catalogues low and xhigh siblings, a bare `swe-2-1` (the ACP refuses
+ * it) and their lightning twins. Shapes mirror `devin models` v3000.14.
+ */
+const swe21: DevinModelsFamily[] = [
+  {
+    family_label: 'SWE-2.1', family_uid: 'swe-2.1', slug: 'swe-2.1', aliases: [],
+    variants: [
+      { model_uid: 'swe-2-1-medium', label: 'SWE-2.1 Medium', max_context_tokens: 262000, cost_tier: 'Free' },
+      { model_uid: 'swe-2-1', label: 'SWE-2.1', max_context_tokens: 262000, cost_tier: 'Free' },
+      { model_uid: 'swe-2-1-low', label: 'SWE-2.1 Low', max_context_tokens: 262000, cost_tier: 'Free' },
+      { model_uid: 'swe-2-1-high', label: 'SWE-2.1 High', max_context_tokens: 262000, cost_tier: 'Free' },
+      { model_uid: 'swe-2-1-xhigh', label: 'SWE-2.1 XHigh', max_context_tokens: 262000, cost_tier: 'Free' },
+      { model_uid: 'swe-2-1-max', label: 'SWE-2.1 Max', max_context_tokens: 262000, cost_tier: 'Free' },
+      { model_uid: 'swe-2-1-low-lightning', label: 'SWE-2.1 Lightning Low', cost_tier: 'High cost' },
+      { model_uid: 'swe-2-1-medium-lightning', label: 'SWE-2.1 Lightning Medium', cost_tier: 'High cost' },
+      { model_uid: 'swe-2-1-lightning', label: 'SWE-2.1 Lightning', cost_tier: 'High cost' },
+      { model_uid: 'swe-2-1-high-lightning', label: 'SWE-2.1 Lightning High', cost_tier: 'High cost' },
+      { model_uid: 'swe-2-1-xhigh-lightning', label: 'SWE-2.1 Lightning XHigh', cost_tier: 'High cost' },
+      { model_uid: 'swe-2-1-max-lightning', label: 'SWE-2.1 Lightning Max', cost_tier: 'High cost' },
+    ],
+  },
+  ...catalogue,
+];
+
+describe('SWE-2.1 thinking levels match SWE-2 (owner 2026-11-24)', () => {
+  const entries = toDevinCatalogEntries(swe21);
+  const byId = Object.fromEntries(entries.map((m) => [m.id, m]));
+
+  it('offers exactly medium, high, max — the same ladder as SWE-2', () => {
+    for (const id of ['swe-2-1-medium', 'swe-2-1-high', 'swe-2-1-max']) {
+      expect(byId[id]?.thinkingLevels).toEqual(['medium', 'high', 'max']);
+    }
+    expect(byId['swe-2-high']?.thinkingLevels).toEqual(['medium', 'high', 'max']);
+  });
+
+  it('hides the low and xhigh siblings, the bare id and the lightning twins of those', () => {
+    for (const id of ['swe-2-1-low', 'swe-2-1-xhigh', 'swe-2-1', 'swe-2-1-lightning', 'swe-2-1-low-lightning', 'swe-2-1-xhigh-lightning']) {
+      expect(byId[id], id).toBeUndefined();
+    }
+    // Lightning twins of the kept levels stay, axis-less like SWE-2's.
+    expect(byId['swe-2-1-medium-lightning']?.thinkingLevels).toEqual([]);
+    expect(byId['swe-2-1-high-lightning']).toBeDefined();
+    expect(byId['swe-2-1-max-lightning']).toBeDefined();
+  });
+
+  it('keeps one family, free, named without the level word', () => {
+    expect(byId['swe-2-1-high']).toMatchObject({ family: 'swe-2-1', familyName: 'SWE-2.1' });
+    expect(byId['swe-2-1-high']?.pricing.free).toBe(true);
+  });
+
+  it('does not touch other families', () => {
+    expect(byId['claude-opus-5-5-low']).toBeDefined();
+    expect(byId['claude-opus-5-5-xhigh']?.thinkingLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+  });
+
+  it('create: the bare family id resolves like SWE-2 (requested level, else medium)', () => {
+    expect(resolveDevinCreateModel('swe-2-1', undefined, entries, 'swe-2-flash-medium'))
+      .toEqual({ ok: true, modelId: 'swe-2-1-medium', levelApplied: 'medium' });
+    expect(resolveDevinCreateModel('swe-2-1', 'max', entries, 'swe-2-flash-medium'))
+      .toEqual({ ok: true, modelId: 'swe-2-1-max', levelApplied: 'max' });
+  });
+
+  it('create: low and xhigh are refused naming the available levels, by level or by id', () => {
+    for (const level of ['low', 'xhigh']) {
+      const viaLevel = resolveDevinCreateModel('swe-2-1-medium', level, entries, 'swe-2-flash-medium');
+      expect(viaLevel.ok).toBe(false);
+      if (!viaLevel.ok) expect(viaLevel.reason).toContain('medium, high, max');
+      const viaFamily = resolveDevinCreateModel('swe-2-1', level, entries, 'swe-2-flash-medium');
+      expect(viaFamily.ok).toBe(false);
+      const viaId = resolveDevinCreateModel(`swe-2-1-${level}`, undefined, entries, 'swe-2-flash-medium');
+      expect(viaId.ok).toBe(false);
+      if (!viaId.ok) expect(viaId.reason).toContain('medium, high, max');
+    }
+  });
+
+  it('a mid-session level swap cannot reach low or xhigh', () => {
+    expect(resolveDevinLevelSwap(byId['swe-2-1-medium'], 'max', entries)).toEqual({ ok: true, slug: 'swe-2-1-max' });
+    expect(resolveDevinLevelSwap(byId['swe-2-1-medium'], 'low', entries).ok).toBe(false);
+    expect(resolveDevinLevelSwap(byId['swe-2-1-medium'], 'xhigh', entries).ok).toBe(false);
+  });
+
+  it('an empty catalogue still passes the id through (cap needs the family listed)', () => {
+    expect(resolveDevinCreateModel('swe-2-1-low', undefined, [], 'swe-2-flash-medium'))
+      .toEqual({ ok: true, modelId: 'swe-2-1-low' });
+  });
+});
+
+/**
  * Lane D5 — the ACP boundary. Live shape captured 2026-11-08 (probe against
  * `devin acp` v3000.12.28, throwaway HOME): `session/new` returns FOUR config
  * options — `mode`, `model` (FLAT `{value,name,_meta}` leaves, ONE value per

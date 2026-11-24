@@ -130,6 +130,15 @@ summary).
   `-lightning`,
   `-priority`) and `fusion-*` combos are separate models, never levels.
   Changing level while a turn runs refuses with 409 `SESSION_BUSY`.
+- **SWE-2.1 level cap (owner, 2026-11-24).** The CLI catalogues SWE-2.1 with
+  `low`/`xhigh` siblings, a bare `swe-2-1` (the ACP refuses it) and lightning
+  twins of those, but the catalogue here lists only `medium|high|max`
+  (SWE-2's ladder) plus the lightning twins of those three. The rest are
+  dropped in `toDevinCatalogEntries` (`FAMILY_LEVEL_CAPS` in
+  `server/src/devin/devin-models.ts`); `swe-2-1` still works as a family id
+  (default `medium`), and `swe-2-1-low`/`-xhigh` or `thinkingLevel: low|xhigh`
+  answer `400 INVALID_REQUEST` naming `medium, high, max`. Wheelhouse and the
+  browser derive their pickers from this list, so they follow with no change.
 - **ACP mapping (lane D5, contract 1.69.1).** ACP's `model` option takes one
   value per family and refuses variant ids, so the server translates every
   application (create's first turn, respawn, `set_model`) against the

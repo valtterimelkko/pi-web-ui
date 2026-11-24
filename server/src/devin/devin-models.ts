@@ -100,6 +100,38 @@ function levelOf(modelUid: string): Level | null {
   return isLevelToken(token) ? token : null;
 }
 
+/**
+ * Owner ruling 2026-11-24: SWE-2.1 offers the same thinking ladder as SWE-2
+ * (medium, high, max) everywhere this catalogue is consumed — the Internal
+ * API, Wheelhouse and the browser — although the CLI also catalogues `low` and
+ * `xhigh` siblings, a bare `swe-2-1` (the ACP refuses it as a model value; it
+ * is just the family) and `-lightning` twins of those. They are LEVELS of one
+ * model, not models, so they are left out of the catalogue rather than listed
+ * with a ladder that disagrees with their own id.
+ */
+const FAMILY_LEVEL_CAPS: Record<string, readonly Level[]> = {
+  'swe-2-1': ['medium', 'high', 'max'],
+};
+
+interface LevelCapHit {
+  base: string;
+  allowed: readonly Level[];
+  /** The out-of-ladder level the id carries; undefined for the bare family id. */
+  level?: Level;
+}
+
+/** Non-null when the id is a level (or the bare family) the family cap leaves out. */
+function levelCapHit(modelUid: string): LevelCapHit | null {
+  const stem = modelUid.endsWith('-lightning') ? modelUid.slice(0, -'-lightning'.length) : modelUid;
+  for (const [base, allowed] of Object.entries(FAMILY_LEVEL_CAPS)) {
+    if (stem === base) return { base, allowed };
+    if (!stem.startsWith(`${base}-`)) continue;
+    const token = stem.slice(base.length + 1);
+    if (isLevelToken(token) && !allowed.includes(token)) return { base, allowed, level: token };
+  }
+  return null;
+}
+
 /** Lane D3: the family base id — the id minus its trailing level token when
  *  it ends in one, else the id itself (axis-less models are their own family). */
 export function devinFamilyBase(modelUid: string): string {
@@ -152,7 +184,7 @@ export function deriveDevinThinkingLevels(
 }
 
 export function toDevinCatalogEntries(families: DevinModelsFamily[]): DevinModelEntry[] {
-  const variants = families.flatMap((f) => f.variants);
+  const variants = families.flatMap((f) => f.variants).filter((v) => levelCapHit(v.model_uid) === null);
   return variants.map((v) => ({
     id: v.model_uid,
     selector: v.model_uid,
@@ -234,6 +266,15 @@ export function resolveDevinCreateModel(
 ): DevinCreateModelResolution {
   const modelId = requested ?? defaultModel;
   const exact = catalogue.find((m) => m.id === modelId);
+  // A level the family cap leaves out is refused (never passed through to the
+  // runtime, which would accept it) — but only once the family is listed.
+  const capHit = exact ? null : levelCapHit(modelId);
+  if (capHit?.level && catalogue.some((m) => m.family === capHit.base)) {
+    return {
+      ok: false,
+      reason: `thinking level "${capHit.level}" not available for "${capHit.base}" (available: ${capHit.allowed.join(', ')})`,
+    };
+  }
   if (exact) {
     if (!thinkingLevel) return { ok: true, modelId: exact.id };
     if (exact.thinkingLevels.length === 0) {
