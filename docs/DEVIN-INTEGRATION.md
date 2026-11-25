@@ -42,7 +42,14 @@ One `devin acp` child per live session:
 - **Lazy spawn** — the child starts on the session's first prompt, not at
   create.
 - **Idle shutdown** — a child with no pending turn is stopped after
-  `DEVIN_PROCESS_IDLE_SHUTDOWN_MS` (default 5 minutes).
+  `DEVIN_PROCESS_IDLE_SHUTDOWN_MS` (default 5 minutes). The window counts
+  from the end of the last activity, not the spawn: every turn end re-arms
+  the timer, a timer firing while the session is busy re-arms instead of
+  dropping, and a sweep on the cleanup interval stops any child left idle
+  past the window even if its timer was lost (lane E, 2026-11-25 — the
+  timer used to arm once at spawn, so one long turn left the child
+  resident). Values below 1 s are clamped to 1 s; a non-finite value
+  falls back to the default.
 - **Respawn → resume** — the next turn spawns a fresh child and calls
   `session/load` with the native session id (Devin names them, e.g.
   `brass-akubra`), so history and context survive the restart. Review fix
