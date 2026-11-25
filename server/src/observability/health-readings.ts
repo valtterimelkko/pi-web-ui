@@ -393,15 +393,18 @@ function readAdmissionCounts(read: (() => AdmissionCountsReading | undefined) | 
  * wired (the detector keeps its legacy raw, explicitly unclassified path).
  * Wired but failing (throws, returns nothing, or malformed) = `unknown`, so the
  * detector can neither name a cause nor recover on missing data.
+ *
+ * Correction 03: a wired ownership source also requires a complete admission
+ * per-runtime view. An empty or partial `runtimes` map (its sum must equal
+ * `activeTurns`) would make every permit invisible and classify as `0` — which
+ * reads as agreement and could recover an armed incident on incomplete data.
+ * That is `unknown` too, never the legacy fallback.
  */
 function readPermitOwnership(
   read: (() => LeaseOwnershipSnapshot | undefined) | undefined,
   admissionCounts: ValidatedAdmissionCounts | undefined,
 ): PermitOwnership | undefined {
   if (!read) return undefined;
-  // Without per-runtime admission counts there is nothing to compare against;
-  // the existing detector is already unwired in that case.
-  if (!admissionCounts?.runtimes) return undefined;
   let snapshot: LeaseOwnershipSnapshot | undefined;
   try {
     snapshot = read();
@@ -409,7 +412,11 @@ function readPermitOwnership(
     return unknownPermitOwnership('source-failed');
   }
   if (snapshot === undefined || snapshot === null) return unknownPermitOwnership('source-failed');
-  return classifyPermitOwnership(snapshot, admissionCounts.runtimes);
+  const runtimes = admissionCounts?.runtimes;
+  if (!runtimes) return unknownPermitOwnership('invalid-admission-counts');
+  const runtimeTotal = Object.values(runtimes).reduce((sum, count) => sum + count, 0);
+  if (runtimeTotal !== admissionCounts.activeTurns) return unknownPermitOwnership('invalid-admission-counts');
+  return classifyPermitOwnership(snapshot, runtimes);
 }
 
 /**

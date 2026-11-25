@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   HealthAlertEvaluator,
+  turnCountMismatchDelta,
   type HealthAlertThresholds,
 } from '../../../src/observability/health-alerts.js';
 import {
@@ -63,13 +64,14 @@ type OwnershipSource = LeaseOwnershipSnapshot | 'throw' | 'junk';
 
 function reading(options: {
   admission?: Partial<Record<string, number>>;
+  counts?: AdmissionCountsReading;
   ownership?: OwnershipSource;
   atMs?: number;
 } = {}): HealthReadings {
   const sources: Parameters<typeof collectHealthReadings>[0] = {
     now: () => options.atMs ?? 1_000,
     activeTurnsFromOperationalMetrics: () => ({}),
-    admissionCounts: () => admissionCounts(options.admission ?? {}),
+    admissionCounts: () => options.counts ?? admissionCounts(options.admission ?? {}),
   };
   if (options.ownership === 'throw') {
     sources.permitOwnership = () => { throw new Error('run manager snapshot unavailable'); };
@@ -173,12 +175,13 @@ describe('permit ownership reading plumbing', () => {
     expect(readings.permitOwnership).toMatchObject({ state: 'unknown', reason: 'invalid-snapshot' });
   });
 
-  it('omits ownership when admission counts are unwired (no misleading classification)', () => {
+  it('marks wired ownership unknown when admission counts are unwired (never absent/legacy)', () => {
     const readings = collectHealthReadings({
       now: () => 1_000,
       permitOwnership: () => snapshot({ activeByRuntime: { pi: 1 } }),
     });
-    expect(readings.permitOwnership).toBeUndefined();
+    expect(readings.permitOwnership).toMatchObject({ state: 'unknown', reason: 'invalid-admission-counts' });
+    expect(turnCountMismatchDelta(readings)).toBeUndefined();
   });
 });
 
@@ -295,5 +298,52 @@ describe('turn-count mismatch with lease ownership', () => {
     expect(alert[0].message).toContain('unclassified');
     expect(alert[0].message).not.toContain('leaked');
     expect(alert[0].message).not.toContain('holds no receipt');
+  });
+});
+
+/**
+ * Correction 03 (parent probe, 02:20Z): a wired ownership source must not be
+ * classified against an incomplete admission per-runtime view. An empty or
+ * partial `runtimes` map makes every permit invisible, so the previous code
+ * returned a zero mismatch — which can also claim recovery for an armed
+ * incident. Incomplete input is `unknown`: freeze, never recover.
+ */
+describe('inconsistent admission per-runtime counts (correction 03)', () => {
+  const brokenCounts: AdmissionCountsReading[] = [
+    { activeTurns: 1, classes: { P2: { active: 1 } }, runtimes: {} as NonNullable<AdmissionCountsReading['runtimes']> },
+    { activeTurns: 1, classes: { P2: { active: 1 } } },
+    { activeTurns: 2, classes: { P2: { active: 2 } }, runtimes: { pi: { activeTurns: 1 } } as NonNullable<AdmissionCountsReading['runtimes']> },
+  ];
+
+  it('exposes unknown instead of a zero mismatch for each incomplete map', () => {
+    for (const counts of brokenCounts) {
+      const readings = reading({ counts, ownership: snapshot() });
+      expect(readings.permitOwnership).toMatchObject({ state: 'unknown', reason: 'invalid-admission-counts' });
+      expect(turnCountMismatchDelta(readings)).toBeUndefined();
+    }
+  });
+
+  it('keeps the parent probe exact: one permit and one complete runtime is unexplained, an empty map is not zero', () => {
+    const good = reading({ counts: { activeTurns: 1, classes: { P2: { active: 1 } }, runtimes: { pi: { activeTurns: 1 } } }, ownership: snapshot() });
+    expect(turnCountMismatchDelta(good)).toBe(1);
+    const broken = reading({ counts: brokenCounts[0], ownership: snapshot() });
+    expect(turnCountMismatchDelta(broken)).toBeUndefined();
+  });
+
+  it('cannot recover an armed incident on omitted or malformed runtimes', () => {
+    const value = evaluator();
+    const validLeak = (atMs: number) => reading({ atMs, counts: { activeTurns: 1, classes: { P2: { active: 1 } }, runtimes: { pi: { activeTurns: 1 } } }, ownership: snapshot() });
+    value.evaluate(validLeak(1_000));
+    value.evaluate(validLeak(31_000));
+    expect(value.evaluate(validLeak(61_000))).toHaveLength(1);
+    // Two or more readings with an incomplete admission view: previously 0 (recovery).
+    for (const [index, counts] of brokenCounts.entries()) {
+      expect(value.evaluate(reading({ atMs: 91_000 + index * 30_000, counts, ownership: snapshot({ activeByRuntime: { pi: 1 } }) }))).toEqual([]);
+    }
+    expect(value.snapshot().turnCountMismatch.alerting).toBe(true);
+    // Genuine agreement on a complete map still recovers exactly once.
+    const validAgree = (atMs: number) => reading({ atMs, counts: { activeTurns: 1, classes: { P2: { active: 1 } }, runtimes: { pi: { activeTurns: 1 } } }, ownership: snapshot({ activeByRuntime: { pi: 1 } }) });
+    expect(value.evaluate(validAgree(181_000))).toEqual([]);
+    expect(value.evaluate(validAgree(211_000))).toHaveLength(1);
   });
 });
