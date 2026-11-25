@@ -7,6 +7,7 @@ import os from 'os';
 import { createSessionRoutes } from '../../../src/internal-api/routes/sessions.js';
 import { RunReceiptManager } from '../../../src/internal-api/run-receipts/run-receipt-manager.js';
 import { RunReceiptStore } from '../../../src/internal-api/run-receipts/run-receipt-store.js';
+import { DevinQueuedItemCancelled } from '../../../src/devin/devin-service.js';
 
 /**
  * Lane A (W1) — RED/GREEN at the ROUTE level, on both real dispatch paths.
@@ -80,6 +81,8 @@ describe('lane A — Devin queued delivery at the route level', () => {
   let runReceipts: RunReceiptManager;
   let routes: ReturnType<typeof createSessionRoutes>;
   let neverStarted: string[];
+  /** The route-supplied onComplete per queued item (contract-faithful fakes). */
+  let callbackByItem: Map<string, (e?: Error) => void>;
 
   const devinEntry = {
     id: 'devin-1', path: 'devin-1', sdkType: 'devin', cwd: '/tmp',
@@ -92,6 +95,7 @@ describe('lane A — Devin queued delivery at the route level', () => {
     receiptDir = path.join(dir, 'receipts');
     observers = [];
     neverStarted = [];
+    callbackByItem = new Map();
 
     const queuedItems = new Map<string, Map<string, 'queued' | 'dispatched'>>();
     devin = {
@@ -103,7 +107,15 @@ describe('lane A — Devin queued delivery at the route level', () => {
         queuedItems.set(sessionId, items);
         return true;
       }),
-      cancelQueuedItem: vi.fn(() => 'removed' as const),
+      // Contract-faithful (correction 07): the real service invokes the
+      // ROUTE-SUPPLIED onComplete synchronously, before returning `removed`.
+      // A fake that only returns `'removed'` cannot see the ownership bug.
+      cancelQueuedItem: vi.fn((sessionId: string, itemId: string) => {
+        const onComplete = callbackByItem.get(itemId);
+        callbackByItem.delete(itemId);
+        onComplete?.(new DevinQueuedItemCancelled(itemId));
+        return 'removed' as const;
+      }),
       getSessionStats: vi.fn(async () => undefined),
       isSessionPinned: vi.fn(() => false),
       getServedModel: vi.fn(async () => 'swe-2-flash-medium'),
@@ -338,6 +350,8 @@ describe('lane A — targeted cancellation never disturbs the live turn', () => 
   let devin: Record<string, any>;
   let routes: ReturnType<typeof createSessionRoutes>;
   let observers: Array<(e: unknown) => void>;
+  /** The route-supplied onComplete per queued item (contract-faithful fakes). */
+  let callbackByItem: Map<string, (e?: Error) => void>;
 
   const devinEntry = {
     id: 'devin-1', path: 'devin-1', sdkType: 'devin', cwd: '/tmp',
@@ -347,10 +361,22 @@ describe('lane A — targeted cancellation never disturbs the live turn', () => 
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-lane-a-cancel-'));
     observers = [];
+    callbackByItem = new Map();
     devin = {
       isRunning: vi.fn(() => true),
-      followUp: vi.fn(async () => true),
-      cancelQueuedItem: vi.fn(() => 'removed' as const),
+      followUp: vi.fn(async (
+        _sessionId: string, _m: string, _e: unknown,
+        onComplete: (e?: Error) => void, opts?: { itemId?: string },
+      ) => { callbackByItem.set(opts?.itemId ?? 'anon', onComplete); return true; }),
+      // Contract-faithful (correction 07): the real service invokes the
+      // ROUTE-SUPPLIED onComplete synchronously, before returning `removed`.
+      // A fake that only returns `'removed'` cannot see the ownership bug.
+      cancelQueuedItem: vi.fn((sessionId: string, itemId: string) => {
+        const onComplete = callbackByItem.get(itemId);
+        callbackByItem.delete(itemId);
+        onComplete?.(new DevinQueuedItemCancelled(itemId));
+        return 'removed' as const;
+      }),
       getSessionStats: vi.fn(async () => undefined),
       isSessionPinned: vi.fn(() => false),
       getServedModel: vi.fn(async () => 'swe-2-flash-medium'),
@@ -447,6 +473,8 @@ describe('lane A — receipt-scoped terminal cleanup (correction §3)', () => {
   let devin: Record<string, any>;
   let routes: ReturnType<typeof createSessionRoutes>;
   let observers: Array<(e: unknown) => void>;
+  /** The route-supplied onComplete per queued item (contract-faithful fakes). */
+  let callbackByItem: Map<string, (e?: Error) => void>;
   /** Items the fake service currently holds, per session. */
   let held: Map<string, Map<string, 'queued' | 'dispatched'>>;
 
@@ -459,12 +487,17 @@ describe('lane A — receipt-scoped terminal cleanup (correction §3)', () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-lane-a-cleanup-'));
     observers = [];
     held = new Map();
+    callbackByItem = new Map();
     devin = {
       isRunning: vi.fn(() => true),
-      followUp: vi.fn(async (sessionId: string, _m: string, _e: unknown, _c: unknown, opts?: { itemId?: string }) => {
+      followUp: vi.fn(async (
+        sessionId: string, _m: string, _e: unknown,
+        onComplete: (e?: Error) => void, opts?: { itemId?: string },
+      ) => {
         const items = held.get(sessionId) ?? new Map<string, 'queued' | 'dispatched'>();
         items.set(opts?.itemId ?? 'anon', 'queued');
         held.set(sessionId, items);
+        callbackByItem.set(opts?.itemId ?? 'anon', onComplete);
         return true;
       }),
       // Mirrors the real service: only a QUEUED item can be removed. An item that
@@ -476,6 +509,11 @@ describe('lane A — receipt-scoped terminal cleanup (correction §3)', () => {
         if (state === undefined) return 'unknown' as const;
         if (state === 'dispatched') return 'dispatched' as const;
         items!.delete(itemId);
+        // Contract-faithful: fire the route's callback before returning, as the
+        // real service does (correction 07).
+        const onComplete = callbackByItem.get(itemId);
+        callbackByItem.delete(itemId);
+        onComplete?.(new DevinQueuedItemCancelled(itemId));
         return 'removed' as const;
       }),
       getSessionStats: vi.fn(async () => undefined),
@@ -609,6 +647,8 @@ describe('lane A correction 05 §2 — terminal receipts cannot pass the barrier
   /** Runtime side-effect witness: every prompt that actually reached the runtime. */
   let executed: string[];
   let held: Map<string, Map<string, 'queued' | 'dispatched'>>;
+  /** The route-supplied onComplete per queued item (contract-faithful fakes). */
+  const callbackByItem = new Map<string, (e?: Error) => void>();
   let barriers: Map<string, { sessionId: string; message: string; opts?: { itemId?: string; onDispatched?: () => Promise<void> | void } }>;
 
   const devinEntry = {
@@ -643,6 +683,11 @@ describe('lane A correction 05 §2 — terminal receipts cannot pass the barrier
         if (state === undefined) return 'unknown' as const;
         if (state === 'dispatched') return 'dispatched' as const;
         items!.delete(itemId);
+        // Contract-faithful: fire the route's callback before returning, as the
+        // real service does (correction 07).
+        const onComplete = callbackByItem.get(itemId);
+        callbackByItem.delete(itemId);
+        onComplete?.(new DevinQueuedItemCancelled(itemId));
         return 'removed' as const;
       }),
       getSessionStats: vi.fn(async () => undefined),
@@ -755,5 +800,187 @@ describe('lane A correction 05 §2 — terminal receipts cannot pass the barrier
     await expect(dequeue(runId)).rejects.toThrow();
     expect(executed).not.toContain('vanished');
     spy.mockRestore();
+  });
+});
+
+/**
+ * Lane A correction 07 §2 (parent answers 06-q1/q2/q3) — DevinQueuedItemCancelled
+ * ownership, with a CONTRACT-FAITHFUL fake for the removal API.
+ *
+ * The real service invokes the ROUTE-SUPPLIED `onComplete` SYNCHRONOUSLY, with the
+ * real `DevinQueuedItemCancelled`, BEFORE returning `removed`
+ * (`devin-service.ts` `cancelQueuedItem`, `abort`, `disposeSession`). A fake that
+ * merely returns `'removed'` cannot see the bug this suite guards: the route's
+ * `complete()` used to write `failed / RUNTIME_ERROR` first, so the removal
+ * owner's later write was a no-op on an already-terminal receipt.
+ *
+ * The fix discriminates by `name` + `source`: a TARGETED removal is settled by its
+ * owner (the route writes nothing), while abort/dispose have no other owner and
+ * settle here as proven non-execution.
+ */
+describe('lane A correction 07 §2 — cancellation ownership at the route', () => {
+  let dir: string;
+  let runReceipts: RunReceiptManager;
+  let devin: Record<string, any>;
+  let routes: ReturnType<typeof createSessionRoutes>;
+  /** Per session, the queued items and the callbacks the ROUTE supplied. */
+  let queues: Map<string, Map<string, { onComplete: (e?: Error) => void }>>;
+  let now: number;
+
+  const devinEntry = {
+    id: 'devin-1', path: 'devin-1', sdkType: 'devin', cwd: '/tmp',
+    firstMessage: '', messageCount: 0, status: 'idle', createdAt: '', lastActivity: '',
+  };
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-lane-a-owner-'));
+    now = Date.now();
+    queues = new Map();
+    devin = {
+      isRunning: vi.fn(() => true),
+      followUp: vi.fn(async (
+        sessionId: string, _m: string, _e: unknown,
+        onComplete: (e?: Error) => void, opts?: { itemId?: string },
+      ) => {
+        const q = queues.get(sessionId) ?? new Map();
+        q.set(opts?.itemId ?? 'anon', { onComplete });
+        queues.set(sessionId, q);
+        return true;
+      }),
+      // CONTRACT-FAITHFUL: the route's callback runs synchronously, with the real
+      // error class, BEFORE the outcome is returned.
+      cancelQueuedItem: vi.fn((sessionId: string, itemId: string) => {
+        const q = queues.get(sessionId);
+        const item = q?.get(itemId);
+        if (!item) return 'unknown' as const;
+        q!.delete(itemId);
+        item.onComplete(new DevinQueuedItemCancelled(itemId));
+        return 'removed' as const;
+      }),
+      abort: vi.fn((sessionId: string) => {
+        for (const [itemId, item] of queues.get(sessionId) ?? []) {
+          item.onComplete(new DevinQueuedItemCancelled(itemId, 'session aborted', 'session_abort'));
+        }
+        queues.delete(sessionId);
+      }),
+      disposeSession: vi.fn((sessionId: string) => {
+        for (const [itemId, item] of queues.get(sessionId) ?? []) {
+          item.onComplete(new DevinQueuedItemCancelled(itemId, 'session disposed', 'session_disposed'));
+        }
+        queues.delete(sessionId);
+      }),
+      getSessionStats: vi.fn(async () => undefined),
+      isSessionPinned: vi.fn(() => false),
+      getServedModel: vi.fn(async () => 'swe-2-flash-medium'),
+    };
+    const registry = {
+      get: vi.fn(async (id: string) => (id === 'devin-1' ? devinEntry : undefined)),
+      upsert: vi.fn(async () => undefined),
+      listAll: vi.fn(async () => [devinEntry]),
+    };
+    runReceipts = new RunReceiptManager({
+      store: new RunReceiptStore(path.join(dir, 'receipts'), { now: () => now }),
+      now: () => now,
+      turnMaxMs: 60_000,
+      runStartWindowMs: 600_000,
+      dispatchBarrierGraceMs: 1,
+    });
+    routes = createSessionRoutes({
+      claudeService: { executionBackend: () => 'sdk-subscription', isRunning: () => false } as never,
+      opencodeService: {} as never,
+      antigravityService: {} as never,
+      multiSessionManager: {
+        addApiObserver: vi.fn(), removeApiObserver: vi.fn(), pinSession: vi.fn(() => true),
+        unpinSession: vi.fn(() => true), subscribeClient: vi.fn(async () => ({ status: 'idle' })),
+        unsubscribeClient: vi.fn(async () => undefined), getSessionStatus: vi.fn(() => ({ status: 'idle' })),
+        getAgentSession: vi.fn(() => undefined),
+      } as never,
+      sessionRegistry: registry as never,
+      piService: {} as never,
+      internalClientId: 'test',
+      watchDir: path.join(dir, 'watches'),
+      runReceiptManager: runReceipts,
+      devinService: devin as never,
+    });
+  });
+
+  afterEach(async () => {
+    await runReceipts.shutdown().catch(() => undefined);
+    await flush(120);
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  const queueOne = async (message: string): Promise<string> => {
+    const res = createMockRes();
+    await routes.handleSendPrompt(
+      createJsonReq('POST', '/api/v1/sessions/devin-1/prompt', { message, mode: 'follow_up', detach: true }),
+      res, 'devin-1',
+    );
+    expect(res.statusCode).toBe(202);
+    await waitUntil(() => devin.followUp.mock.calls.length >= 1, 'the message to reach the queue');
+    const call = devin.followUp.mock.calls.at(-1) as unknown as [string, string, unknown, unknown, { itemId: string }];
+    return call[4].itemId;
+  };
+
+  it('(a) targeted removal is settled by its owner, not by the route', async () => {
+    const runId = await queueOne('disconnect victim');
+
+    // Exactly the real service's ordering: the callback fires inside the call.
+    const outcome = devin.cancelQueuedItem('devin-1', runId);
+    expect(outcome).toBe('removed');
+
+    // The owner's write follows, as the SSE-disconnect path does it.
+    await runReceipts.markItemRemoved(runId);
+    await flush(60);
+
+    const after = runReceipts.get(runId)!;
+    expect(after.status).toBe('cancelled');
+    expect(after.liveness?.delivery).toMatchObject({ state: 'cancelled_before_dispatch', basis: 'targeted_removal' });
+    // The generic runtime failure must NOT be what the caller sees.
+    expect(after.errorCode).not.toBe('RUNTIME_ERROR');
+    // Only that item's lease was released: it held the only one.
+    expect(runReceipts.getDrainingCount()).toBe(0);
+    const snap = runReceipts.getLeaseOwnershipSnapshot();
+    expect((snap.queuedByRuntime.devin ?? 0) + (snap.activeByRuntime.devin ?? 0)).toBe(0);
+  });
+
+  it('(b) ceiling expiry removal keeps the proven-removal outcome', async () => {
+    const runId = await queueOne('ceiling victim');
+    runReceipts.setCancelQueuedDelivery(async (id, sessionId) => devin.cancelQueuedItem(sessionId, id));
+
+    const manager = runReceipts as unknown as { reconcileStalledRuns(): Promise<void> };
+    now += 70_000;
+    await manager.reconcileStalledRuns(); // past the acceptance ceiling: reserved
+    now += 100_000;
+    await manager.reconcileStalledRuns(); // grace elapsed: targeted removal
+    await flush(60);
+
+    const after = runReceipts.get(runId)!;
+    // The removal owner's proven-removal outcome, not a generic failure.
+    expect(after.status).toBe('cancelled');
+    expect(after.liveness?.delivery).toMatchObject({ state: 'cancelled_before_dispatch', basis: 'targeted_removal' });
+    expect(after.errorCode).not.toBe('RUNTIME_ERROR');
+  });
+
+  it('(c) session abort settles per item as proven non-execution (no other owner)', async () => {
+    const runId = await queueOne('abort victim');
+
+    devin.abort('devin-1'); // callback fires synchronously, source=session_abort
+    await waitUntil(() => runReceipts.get(runId)?.status !== 'queued', 'the aborted item to settle');
+
+    const after = runReceipts.get(runId)!;
+    expect(after.status).toBe('cancelled');
+    expect(after.liveness?.delivery).toMatchObject({ state: 'cancelled_before_dispatch', basis: 'targeted_removal' });
+    expect(after.errorCode).not.toBe('RUNTIME_ERROR');
+  });
+
+  it('(c2) session dispose settles the same way as abort', async () => {
+    const runId = await queueOne('dispose victim');
+    devin.disposeSession('devin-1');
+    await waitUntil(() => runReceipts.get(runId)?.status !== 'queued', 'the disposed item to settle');
+
+    const after = runReceipts.get(runId)!;
+    expect(after.status).toBe('cancelled');
+    expect(after.errorCode).not.toBe('RUNTIME_ERROR');
   });
 });

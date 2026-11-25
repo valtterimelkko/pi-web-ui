@@ -358,3 +358,104 @@ describe('DevinService — receipt-owned queue lifecycle (lane A)', () => {
     await tick(30);
   });
 });
+
+/**
+ * Lane A correction 07 §2 (parent answer 06-q1 part ii) — the REAL service's
+ * removal API owns its callback.
+ *
+ * Proves on the real `DevinService` (queue primed through a real ACP handshake,
+ * as above) that `cancelQueuedItem`, `abort` and `disposeSession` invoke the
+ * route-supplied `onComplete` SYNCHRONOUSLY — before the outcome is returned —
+ * with the real `DevinQueuedItemCancelled` and the correct `source`.
+ *
+ * That ordering is what makes the route's ownership rule necessary: a targeted
+ * removal's caller writes the proven-removal receipt immediately afterwards, so
+ * the route must not write a generic terminal first. Abort/dispose have no other
+ * owner, so the route settles those itself.
+ */
+describe('lane A 07 §2 — removal API callback ordering and source', () => {
+  let service: DevinService;
+  let children: FakeChild[];
+  let dir: string;
+
+  beforeEach(() => {
+    ({ service, children, dir } = makeService());
+    // This file's handshake helper answers config writes against a module-level
+    // counter; each describe starts its own child, so reset it or the child is
+    // never driven to `session/prompt` and every test here times out.
+    configAnswers = 0;
+  });
+
+  afterEach(() => {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
+  /** Prime a running turn so the queue accepts follow-ups. */
+  const runningSession = async (): Promise<string> => {
+    const { sessionId } = await service.createSession('/ws');
+    void service.sendPrompt(sessionId, 'first', () => undefined, () => undefined);
+    const child = await openSession(children);
+    await waitForSent(child, 'session/prompt', 1);
+    return sessionId;
+  };
+
+  it('cancelQueuedItem fires onComplete synchronously, before returning, source targeted_removal', async () => {
+    const sessionId = await runningSession();
+    let returned = false;
+    const seen: Array<{ atReturn: boolean; name?: string; source?: string; itemId?: string }> = [];
+    await service.followUp(sessionId, 'second', () => undefined, (error) => {
+      seen.push({
+        atReturn: returned,
+        name: error?.name,
+        source: (error as { source?: string } | undefined)?.source,
+        itemId: (error as { itemId?: string } | undefined)?.itemId,
+      });
+    }, { itemId: 'run-owned' });
+
+    const outcome = service.cancelQueuedItem(sessionId, 'run-owned');
+    returned = true;
+
+    expect(outcome).toBe('removed');
+    expect(seen).toHaveLength(1);
+    // Synchronous: the callback had already run before the call returned.
+    expect(seen[0].atReturn).toBe(false);
+    expect(seen[0].name).toBe('DevinQueuedItemCancelled');
+    expect(seen[0].source).toBe('targeted_removal');
+    expect(seen[0].itemId).toBe('run-owned');
+    expect(service.hasQueuedItem(sessionId, 'run-owned')).toBe(false);
+  }, 20_000);
+
+  it('abort fires onComplete for every queued item, source session_abort', async () => {
+    const sessionId = await runningSession();
+    let returned = false;
+    const seen: Array<{ atReturn: boolean; source?: string }> = [];
+    const record = (error?: Error) => {
+      seen.push({ atReturn: returned, source: (error as { source?: string } | undefined)?.source });
+    };
+    await service.followUp(sessionId, 'second', () => undefined, record, { itemId: 'run-a1' });
+    await service.followUp(sessionId, 'third', () => undefined, record, { itemId: 'run-a2' });
+
+    service.abort(sessionId);
+    returned = true;
+
+    expect(seen).toHaveLength(2); // every queued item settles, none orphaned
+    expect(seen.every((s) => s.atReturn === false)).toBe(true);
+    expect(seen.map((s) => s.source)).toEqual(['session_abort', 'session_abort']);
+  }, 20_000);
+
+  it('disposeSession fires onComplete for each queued item, source session_disposed', async () => {
+    const sessionId = await runningSession();
+    let returned = false;
+    const seen: Array<{ atReturn: boolean; source?: string }> = [];
+    await service.followUp(sessionId, 'second', () => undefined, (error) => {
+      seen.push({ atReturn: returned, source: (error as { source?: string })?.source });
+    }, { itemId: 'run-d1' });
+
+    service.disposeSession(sessionId);
+    returned = true;
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].atReturn).toBe(false);
+    expect(seen[0].source).toBe('session_disposed');
+  }, 20_000);
+});

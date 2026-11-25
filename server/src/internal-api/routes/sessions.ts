@@ -3713,7 +3713,35 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // `markItemUnconfirmed`-style evidence) rather than a bare runtime error, so
       // the notice can advise a retry it has actually proven safe.
       const followUpRace = error instanceof DevinFollowUpRaceError;
-      const terminalWrite = busy
+      // Correction 06 §2 (review finding 2, parent answers 06-q1/q2/q3): the real
+      // `cancelQueuedItem` calls this callback with `DevinQueuedItemCancelled`
+      // SYNCHRONOUSLY, before returning. Writing a generic `failed / RUNTIME_ERROR`
+      // here made the removal owner's later write a no-op on an already-terminal
+      // receipt, so the frozen evidence ("proven removal ⇒ cancelled_before_dispatch,
+      // only that lease released") was never produced end to end.
+      //
+      // A TARGETED removal has an owner that writes the proven outcome immediately
+      // after this callback returns, so this must not write first. An abort/dispose
+      // has NO other owner, so it settles here as an honest proven removal.
+      //
+      // Discriminate on `name` + `source`, not `instanceof` alone: the service
+      // module can be loaded twice (route vs service import graph), which yields a
+      // second class object and a false negative.
+      const queuedCancelled = error instanceof Error && error.name === 'DevinQueuedItemCancelled';
+      const cancelSource = queuedCancelled
+        ? ((error as { source?: string }).source ?? 'targeted_removal')
+        : undefined;
+      const removalOwnedElsewhere = queuedCancelled && cancelSource === 'targeted_removal';
+      if (queuedCancelled && !removalOwnedElsewhere) {
+        logger.info(
+          `[InternalAPI] Queued item ${runId} cancelled by ${cancelSource} (no other owner): settling as proven non-execution`,
+        );
+      }
+      const terminalWrite = removalOwnedElsewhere
+        ? Promise.resolve(undefined)
+        : queuedCancelled
+          ? runReceipts.markItemRemoved(runId)
+          : busy
         ? runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY })
         : followUpRace
           ? runReceipts.markFollowUpRaceLost(runId)

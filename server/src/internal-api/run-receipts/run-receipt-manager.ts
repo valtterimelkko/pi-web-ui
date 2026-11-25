@@ -684,6 +684,27 @@ export class RunReceiptManager {
     return this.withRunLock(runId, () => this.finishUnlocked(runId, outcome));
   }
 
+  /**
+   * Correction 06 §1 (review finding 1): terminalise ONLY if the receipt is
+   * still `queued`, re-checked INSIDE the run lock.
+   *
+   * The store refreshes its cache only after `persist`, and the barrier's
+   * `markStarted` holds the run lock across that persist. A fence that checked
+   * `status === 'queued'` outside the lock therefore saw a stale `queued`, waited
+   * for the lock, and then wrote `failed / NEVER_STARTED / unconfirmed` onto a run
+   * that had just started and was about to execute — receipt and reality
+   * disagreeing. Under the lock this is impossible: either the barrier refreshed
+   * `started` first (no-op), or the fence wins and the barrier rejects.
+   */
+  async finishIfQueued(runId: string, outcome: RunFinishOutcome): Promise<RunReceipt | undefined> {
+    await this.init();
+    return this.withRunLock(runId, async () => {
+      const current = this.store.get(runId);
+      if (!current || current.status !== 'queued') return undefined;
+      return this.finishUnlocked(runId, outcome);
+    });
+  }
+
   private async finishUnlocked(runId: string, outcome: RunFinishOutcome): Promise<RunReceipt | undefined> {
     let current = this.store.get(runId);
     if (!current) return undefined;
@@ -1090,7 +1111,9 @@ export class RunReceiptManager {
       logger.warn(`Run ${runId} stayed reserved past the dispatch-barrier grace; terminalising as unconfirmed delivery`);
       const reserved = this.store.get(runId);
       if (!reserved || isTerminal(reserved.status) || reserved.status !== 'queued') return;
-      const fenced = await this.finish(runId, {
+      // Correction 06 §1: re-checked under the run lock by `finishIfQueued`, so a
+      // barrier that starts during a slow persist is never fenced mid-flight.
+      const fenced = await this.finishIfQueued(runId, {
         status: 'failed',
         errorCode: 'NEVER_STARTED',
         stallReason: 'absolute',
@@ -1110,7 +1133,9 @@ export class RunReceiptManager {
     }
     const before = this.store.get(runId);
     if (!before || isTerminal(before.status) || before.status !== 'queued') return;
-    const terminal = await this.finish(runId, outcome === 'removed'
+    // Correction 06 §1: the same stale-cache window applies to the removal
+    // outcomes, so these also re-check `queued` under the lock.
+    const terminal = await this.finishIfQueued(runId, outcome === 'removed'
       ? {
           status: 'cancelled',
           errorCode: 'NEVER_STARTED',
