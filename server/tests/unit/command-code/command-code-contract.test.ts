@@ -34,6 +34,8 @@ describe('Command Code Internal API boundary', () => {
     // 1.70.0: agy-post-turn lane C (2026-11-22) — PROVIDER_QUOTA_EXHAUSTED /
     // PROVIDER_TRANSIENT on the Antigravity run receipt plus additive
     // errorClass/resetAt on the failed turn's agent_end.
-    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.70.0');
+    // 1.71.0: queued-delivery and alert robustness (2026-11-25) — optional
+    // RunLivenessEvidence.delivery, Devin provider-quota classification.
+    expect(INTERNAL_API_CONTRACT_VERSION).toBe('1.71.0');
   });
 });
