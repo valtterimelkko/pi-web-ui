@@ -43,6 +43,7 @@ this host, and the repo is treated as permanently public. Public positioning: `R
 | Observability: logging, diagnostics, error codes | `docs/OBSERVABILITY.md` |
 | Known sharp edges | `docs/SHARP-EDGES.md` |
 | Internal API, orchestration or live validation | `docs/INTERNAL-API.md`, `docs/INTERNAL-API-ORCHESTRATION.md`, `docs/LIVE-VALIDATION.md` |
+| To fix or change Internal API behaviour (triangulate earlier programmes first, so nothing regresses or conflicts) | `docs/INTERNAL-API-PROGRAMME-HISTORY.md` |
 | A surface the command centre (Wheelhouse) consumes (Internal API routes, the session registry, notifications, `packages/session-core` and `packages/session-ui`) | `/root/command-centre` — its DEPENDENCIES.md |
 | Voice Mode | `docs/VOICE-MODE-INDEX.md` |
 | Cross-repo strategic context and current status | `AGENT-REFERENCE.md` (`## Cross-repo strategic context`) |
