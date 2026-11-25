@@ -72,7 +72,9 @@ import {
   type AdmissionControllerOptions,
 } from './admission-controller.js';
 import { getHealthTelemetry } from '../observability/health-telemetry.js';
-import { createValidationLeakOverride } from '../observability/admission-leak-override.js';
+import { createValidationLeakOverride, type ValidationLeakOverride } from '../observability/admission-leak-override.js';
+import type { AdmissionCountsReading, HealthReadingSources } from '../observability/health-readings.js';
+import type { LeaseOwnershipSnapshot } from '../observability/permit-ownership.js';
 import { CommandCodeService } from '../command-code/command-code-service.js';
 import { getDevinService, type DevinService } from '../devin/index.js';
 import { DrainController, composeInterruptedBusySessions, consumeDrainRecord, createBusySessionSource, createDrainBusyRuntimeProbe, type DrainBusySession } from './drain-controller.js';
@@ -143,6 +145,28 @@ const DEFAULT_WATCH_DIR = path.join(os.homedir(), '.pi-web-ui', 'watches');
 const DEFAULT_PIN_DIR = path.join(os.homedir(), '.pi-web-ui', 'pins');
 const DEFAULT_RUN_RECEIPT_DIR = path.join(os.homedir(), '.pi-web-ui', 'run-receipts');
 const DEFAULT_NOTIFICATIONS_DIR = path.join(os.homedir(), '.pi-web-ui', 'notifications');
+
+/**
+ * Health-sample sources registered by the Internal API server (J3 + the
+ * queued-delivery robustness integration). Admission counts and attached-lease
+ * ownership are read synchronously in the same sample, so retained terminal
+ * debt is classified apart from an unexplained permit. The validation leak
+ * override decorates ONLY admission counts: an injected stuck permit must stay
+ * unexplained excess, never be "explained" by ownership.
+ */
+export function internalApiHealthSources(
+  admission: { activeCounts: () => AdmissionCountsReading },
+  runReceipts: { getLeaseOwnershipSnapshot: () => LeaseOwnershipSnapshot },
+  validationLeak: Pick<ValidationLeakOverride, 'apply'> | undefined,
+): Pick<HealthReadingSources, 'admissionCounts' | 'permitOwnership'> {
+  return {
+    admissionCounts: () => {
+      const counts = admission.activeCounts();
+      return validationLeak ? validationLeak.apply(counts) : counts;
+    },
+    permitOwnership: () => runReceipts.getLeaseOwnershipSnapshot(),
+  };
+}
 
 /**
  * Build the shared admission options from the server boundary. Command Code's
@@ -538,12 +562,9 @@ export class InternalApiServer {
       onRefused: (reason) => logger.warn(`[InternalAPI] admission: ${reason}`),
     });
     if (validationLeak) logger.warn(`[InternalAPI] admission: VALIDATION leak injection active (${validationLeak.describe()})`);
-    getHealthTelemetry().registerSources({
-      admissionCounts: () => {
-        const counts = admissionController.activeCounts();
-        return validationLeak ? validationLeak.apply(counts) : counts;
-      },
-    });
+    getHealthTelemetry().registerSources(
+      internalApiHealthSources(admissionController, runReceiptManager, validationLeak ?? undefined),
+    );
 
     // B4 drain-then-restart: closes admission through the shared seam and
     // waits for active turns AND nonterminal receipts before a restart.
