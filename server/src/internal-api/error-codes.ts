@@ -345,8 +345,16 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
   [ErrorCode.NEVER_STARTED]: {
     httpStatus: 500,
     description: 'An accepted, dispatched run produced no runtime activity inside the start window and was terminalised by the start watchdog.',
-    cause: 'The runtime never began the work under this run (no eligible activity event and no output evidence was ever observed).',
-    hint: 'The message never ran; re-dispatch it. Watchers were notified with runNeverStarted evidence.',
+    // Lane A (W1): this used to read "The runtime never began the work under this
+    // run". Absence of observed activity is not proof of non-delivery: a run can
+    // sit in a runtime-side FIFO queue and execute later (audit §2A). State what
+    // was observed, not what it is assumed to mean.
+    cause: 'No eligible runtime activity event and no output evidence was ever observed for this run inside the start window.',
+    // Lane A (W1): the previous hint ("The message never ran; re-dispatch it")
+    // told callers to retry work that could still execute. Delivery is now
+    // recorded on the receipt (`liveness.delivery`): only a proven
+    // `cancelled_before_dispatch` makes a retry safe.
+    hint: 'Delivery is unconfirmed: the message may never have reached the runtime, or it may still be held in the runtime\'s follow-up queue. Inspect the run receipt (`liveness.delivery`) and the session transcript before retrying; re-dispatch only when delivery is proven absent. Watchers were notified with runNeverStarted evidence.',
     docs: 'docs/INTERNAL-API.md#run-receipts',
   },
   [ErrorCode.RUN_TRANSPORT_LOST]: {

@@ -1156,6 +1156,50 @@ export interface RunCessationEvidence {
 }
 
 /**
+ * Lane A (W1): what is known about DELIVERY of an accepted run's message.
+ *
+ * Absence of events is not proof that nothing executed — a runtime may hold a
+ * message in a FIFO queue and run it minutes later. This evidence records the
+ * delivery fact separately from execution evidence so a caller (and an operator
+ * notice) can tell "provably never left the queue" from "queued and then
+ * unobservable":
+ *
+ *  - `queued` — accepted into a runtime-side FIFO queue; nothing dispatched.
+ *  - `dispatched` — the runtime dequeued it and started the turn (the start
+ *    clock begins here, not at acceptance).
+ *  - `cancelled_before_dispatch` — proven removed from the queue; it will
+ *    never execute under this run.
+ *  - `unconfirmed` — queued, then delivery could not be established either
+ *    way (disconnect, registry failure, targeted cancel raced the dequeue).
+ *    Unknown must never imply "safe to retry".
+ *  - `late_terminal_observed` — recorded as never dispatched/cancelled, then a
+ *    terminal event arrived anyway. Both facts are kept: the terminal status is
+ *    not reopened, and the contradiction is named rather than smoothed over.
+ */
+export type RunDeliveryState =
+  | 'queued'
+  | 'dispatched'
+  | 'cancelled_before_dispatch'
+  | 'unconfirmed'
+  | 'late_terminal_observed';
+
+/** Why the delivery evidence says what it says (low-cardinality, bounded). */
+export type RunDeliveryBasis =
+  | 'follow_up_queue'
+  | 'dequeue'
+  | 'targeted_removal'
+  | 'follow_up_race'
+  | 'queue_state_unknown'
+  | 'memory_queue_lost_at_restart'
+  | 'late_terminal';
+
+export interface RunDeliveryEvidence {
+  state: RunDeliveryState;
+  basis: RunDeliveryBasis;
+  observedAt: string;
+}
+
+/**
  * Durable, bounded liveness evidence for one accepted Internal API run.
  * It describes what Pi Web UI observed; it is not semantic task completion or
  * proof that arbitrary nested/external work has quiesced.
@@ -1168,6 +1212,12 @@ export interface RunLivenessEvidence {
   watchdog?: RunWatchdogEvidence;
   terminalObservations?: RunTerminalObservation[];
   cessation: RunCessationEvidence;
+  /**
+   * Lane A (W1): delivery fact for queue-capable runtimes. Absent on receipts
+   * accepted before this evidence existed and on runtimes with no queue.
+   * Additive and optional: consumers that ignore it behave exactly as before.
+   */
+  delivery?: RunDeliveryEvidence;
 }
 
 /**

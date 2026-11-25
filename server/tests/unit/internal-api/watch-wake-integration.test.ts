@@ -308,7 +308,20 @@ describe('watch wake — full chain: firing → wake dispatch → run receipt (i
     await devinRoutes.handleGetWatch(createJsonReq('GET', '/api/v1/sessions/child-1/watch'), get, 'child-1', new URLSearchParams());
     const watch = JSON.parse(get.body);
     expect(watch.wakeAttempts).toMatchObject([{ status: 'dispatched', deliveryKind: 'deferred-follow-up' }]);
-    expect(followUp).toHaveBeenCalledWith('parent-1', 'child done', expect.any(Function), expect.any(Function));
+    // Lane A (W1): the queued follow-up now carries the run's identity and its
+    // awaited dispatch barrier, so the receipt is stamped at the real dequeue
+    // instead of at acceptance.
+    expect(followUp).toHaveBeenCalledWith(
+      'parent-1',
+      'child done',
+      expect.any(Function),
+      expect.any(Function),
+      expect.objectContaining({ itemId: expect.stringMatching(/^[0-9a-f-]{36}$/), onDispatched: expect.any(Function) }),
+    );
+    // ...and the receipt is QUEUED, not started, at this point.
+    const runId = (followUp.mock.calls[0] as unknown as [string, string, unknown, unknown, { itemId: string }])[4].itemId;
+    expect(runReceipts.get(runId)?.status).toBe('queued');
+    expect(runReceipts.get(runId)?.liveness?.delivery?.state).toBe('queued');
   });
 
   it('promotes idle steer to a receipted prompt turn', async () => {
