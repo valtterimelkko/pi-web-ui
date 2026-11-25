@@ -18,6 +18,25 @@ import { devinSpawnEnv } from './devin-spawn-env.js';
 
 const logger = createLogger('DevinService');
 
+/** Default process idle window — mirrors `DEVIN_PROCESS_IDLE_SHUTDOWN_MS`'s
+ *  default in config.ts. */
+export const DEFAULT_PROCESS_IDLE_SHUTDOWN_MS = 300_000;
+
+/** Floor for the process idle window. A 0/1 ms window makes the busy re-arm
+ *  (lane E) a ~1 ms timer loop for the whole duration of a running turn. */
+export const MIN_PROCESS_IDLE_SHUTDOWN_MS = 1_000;
+
+/** Lane E review r1 finding F1: a misconfigured window must not become a ~1 ms
+ *  timer loop. Non-finite (NaN / ±Infinity — what `parseInt` yields for a
+ *  non-numeric `DEVIN_PROCESS_IDLE_SHUTDOWN_MS`) falls back to the config
+ *  default; a finite value below the floor is raised to it; anything else is
+ *  unchanged. Applied where the service reads the window, so the constructor
+ *  option is clamped as well. */
+export function clampProcessIdleShutdownMs(raw: number): number {
+  if (!Number.isFinite(raw)) return DEFAULT_PROCESS_IDLE_SHUTDOWN_MS;
+  return raw < MIN_PROCESS_IDLE_SHUTDOWN_MS ? MIN_PROCESS_IDLE_SHUTDOWN_MS : raw;
+}
+
 /** Structured outcome of an auxiliary `devin` subprocess run (`--version`,
  *  `models list`). Never throws for a non-zero exit or a timeout. */
 export interface DevinResult {
@@ -178,6 +197,8 @@ export interface DevinServiceOptions {
    *  is gated by config.devinEnabled alone). */
   enabledOverride?: boolean;
   processIdleShutdownMs?: number;
+  /** Test seam: override the cleanup-sweep interval (config default 60s). */
+  cleanupIntervalMs?: number;
 }
 
 export class DevinService {
@@ -226,9 +247,9 @@ export class DevinService {
     this.enabledOverride = opts.enabledOverride;
     this.idleTimeoutMs = config.devinIdleTimeoutMs;
     this.maxSessions = config.devinMaxSessions;
-    this.cleanupIntervalMs = config.devinCleanupIntervalMs;
+    this.cleanupIntervalMs = opts.cleanupIntervalMs ?? config.devinCleanupIntervalMs;
     this.promptTimeoutMs = config.devinPromptTimeoutMs;
-    this.processIdleShutdownMs = opts.processIdleShutdownMs ?? config.devinProcessIdleShutdownMs;
+    this.processIdleShutdownMs = clampProcessIdleShutdownMs(opts.processIdleShutdownMs ?? config.devinProcessIdleShutdownMs);
     this.startCleanupInterval();
   }
 
@@ -239,6 +260,10 @@ export class DevinService {
   }
 
   private cleanupIdleSessions(): void {
+    // Lane E: belt-and-braces process reaping FIRST — an idle ACP child costs
+    // ~460 MB with its MCP helpers, so a lost or cleared timer must not keep
+    // it resident until the next service restart.
+    this.sweepIdleProcesses();
     const now = Date.now();
     for (const [sessionId, meta] of this.sessionMeta) {
       if (meta.pinned) continue;
@@ -534,6 +559,10 @@ export class DevinService {
       onComplete(error);
       // Drain any queued follow-ups as the next turn.
       this.drainQueue(sessionId);
+      // Lane E: the idle window counts from the END of this turn (and of the
+      // last drained one), not from the spawn — a turn longer than the window
+      // used to leave the child resident for ever.
+      this.armProcessIdleTimer(sessionId);
     };
 
     const historyBefore = await this.store.loadHistory(sessionId);
@@ -777,18 +806,70 @@ export class DevinService {
     ];
   }
 
-  /** Plan D1: shut an idle child down after this long with no turn. The next
-   *  turn respawns with session/load. */
+  /** Plan D1 + lane E: shut an idle child down after this long with no session
+   *  work. The next turn respawns with session/load.
+   *
+   *  Lane E fix: a timer that fires while the session is busy (running, starting
+   *  or holding queued follow-ups) is RE-ARMED instead of dropped. Dropping it
+   *  was the production leak — a turn longer than the idle window fired the
+   *  only timer there ever was, and the ACP child (with its MCP helpers) then
+   *  stayed resident until a service restart. Every turn end also arms it (see
+   *  `finalizeRunState`), so the window counts from the LAST activity. */
   private armProcessIdleTimer(sessionId: string): void {
     const existing = this.processIdleTimers.get(sessionId);
     if (existing) clearTimeout(existing);
+    this.processIdleTimers.delete(sessionId);
+    const client = this.clients.get(sessionId);
+    if (!client || client.hasExited) return; // nothing to reap
     const timer = setTimeout(() => {
       this.processIdleTimers.delete(sessionId);
-      if (this.runningSessions.has(sessionId)) return; // busy: keep the child
-      this.shutdownProcess(sessionId);
+      if (this.hasPendingWork(sessionId)) {
+        // Busy: keep the child, but never lose the shutdown — re-arm.
+        this.armProcessIdleTimer(sessionId);
+        return;
+      }
+      this.idleShutdown(sessionId);
     }, this.processIdleShutdownMs);
     if (timer.unref) timer.unref();
     this.processIdleTimers.set(sessionId, timer);
+  }
+
+  /** Lane E: the session cannot be reaped right now — a turn is running or
+   *  starting, or follow-ups are still queued. */
+  private hasPendingWork(sessionId: string): boolean {
+    if (this.runningSessions.has(sessionId) || this.startingSessions.has(sessionId)) return true;
+    return (this.turnQueues.get(sessionId)?.length ?? 0) > 0;
+  }
+
+  /** Lane E: stop an idle child and leave ONE info line, so the journal can
+   *  prove production reaping (session id + how long it was idle). */
+  private idleShutdown(sessionId: string, now = Date.now()): void {
+    const meta = this.sessionMeta.get(sessionId);
+    const idleMs = meta ? Math.max(0, now - meta.lastActivity) : this.processIdleShutdownMs;
+    this.shutdownProcess(sessionId);
+    logger.info('devin process idle shutdown: sessionId=%s idleMs=%d', sessionId, idleMs);
+  }
+
+  /** Lane E: belt-and-braces reaper on the cleanup interval, covering a lost or
+   *  cleared per-session timer. Stops any live child whose session is not
+   *  running/starting, has no queued follow-ups, is not pinned, and has been
+   *  idle longer than the window. Deliberately does NOT consult browser
+   *  subscriber counts: a viewer never needs the ACP child — the next turn
+   *  respawns it through session/load. `now` is injectable for tests. Returns
+   *  the number of children reaped. */
+  sweepIdleProcesses(now = Date.now()): number {
+    let reaped = 0;
+    for (const [sessionId, client] of this.clients) {
+      if (!client || client.hasExited) continue;
+      const meta = this.sessionMeta.get(sessionId);
+      if (!meta) continue;
+      if (meta.pinned) continue;
+      if (this.hasPendingWork(sessionId)) continue;
+      if (now - meta.lastActivity <= this.processIdleShutdownMs) continue;
+      this.idleShutdown(sessionId, now);
+      reaped += 1;
+    }
+    return reaped;
   }
 
   /** Stop and forget the session's ACP child (idle shutdown, abort, dispose). */
