@@ -21,7 +21,7 @@ Current contract:
   "name": "pi-web-ui-internal-api",
   "routePrefix": "/api/v1",
   "majorVersion": "v1",
-  "contractVersion": "1.70.0",
+  "contractVersion": "1.71.0",
   "stability": "beta",
   "contractDoc": "docs/INTERNAL-API-CONTRACT.md"
 }
@@ -70,6 +70,7 @@ Exception table (date, owner decision, what, version):
 
 | Date | Owner decision | What | Version |
 | --- | --- | --- | --- |
+| 2026-11-25 | INTERNAL-API-QUEUED-DELIVERY-AND-ALERT-ROBUSTNESS-PLAN (owner plan of record: execute the plan end to end, 25 Nov 2026) | 1.71.0: optional `RunLivenessEvidence.delivery` describes receipt-owned queue/dispatch/removal facts or unconfirmed/late-terminal evidence; queued execution clocks begin at actual dispatch, targeted cancellation cannot abort unrelated work, and no-activity outcomes no longer assert unproven non-execution. Existing provider-quota vocabulary and broker `errorClass`/`resetAt` also cover Devin's evidenced free-model refusal; its goal pauses without autonomous quota retries. No new route, error code or default; optional receipt evidence and additive event semantics. | 1.71.0 |
 | 2026-10-02 | post-H-b review (owner accepted) | 1.58.5: /capacity memory.currentBytes and admission memory checks report working set (current − inactive_file), not total | 1.58.5 |
 | 2026-10-03 | R5 (owner accepted every recommendation; the C6 window closed at R5) | 1.59.0 (L1): /capacity gains `quarantinedOldestAgeMs` — age of the oldest quarantined admission lease; quarantined entries gained a reconciliation guard (release on confirmed session quiescence). Additive only. | 1.59.0 |
 | 2026-10-03 | R5 (wave K GO, slimmed: continue once after a restart interruption, plus parent visibility) | 1.60.0 (wave K): `SessionGoalProjection` gains the optional `interruption` object and top-level `autoContinued`; a non-continued stop projects as `status: "paused"`, `pausedReason: "interrupted"`; a verified auto-continue emits `goal_state` (never `goal_end`). Additive only. | 1.60.0 |
@@ -87,6 +88,8 @@ Exception table (date, owner decision, what, version):
 | 2026-11-22 | ANTIGRAVITY-POST-TURN-WORK-PLAN P1b lane C (owner plan of record, 22 Nov 2026: execute the plan end to end) | 1.70.0 (agy-post-turn lane C, provider error classes): two additive error codes name an Antigravity turn that failed because the provider refused it — `PROVIDER_QUOTA_EXHAUSTED` (429; the provider reported `RESOURCE_EXHAUSTED`, so retrying cannot help until the quota resets) and `PROVIDER_TRANSIENT` (503; the provider answered 500/502/503/504, so the same request can succeed after a backoff). A classified Antigravity failure now reaches the **run receipt** as `errorCode: "PROVIDER_QUOTA_EXHAUSTED"` / `"PROVIDER_TRANSIENT"` instead of the generic `RUNTIME_ERROR`; every other runtime and every unclassified failure keeps `RUNTIME_ERROR`. The failed turn's broker `agent_end` carries additive `errorClass` (`"quota"` / `"transient"` / `"other"`) and, only when the provider text states one, `resetAt` (ISO 8601). No new routes, fields on REST payloads or defaults; additive error-code values and additive broker-event keys only. | 1.70.0 |
 
 ### Changelog
+
+- **1.71.0** (minor — queued-delivery and alert-robustness programme, owner plan of record 25 Nov 2026). Additive delivery evidence: `RunLivenessEvidence.delivery?: { state, basis, observedAt }`. States are `queued`, `dispatched`, `cancelled_before_dispatch`, `unconfirmed` and `late_terminal_observed`; low-cardinality bases identify queue/dequeue, targeted removal, lost-enqueue race, unknown state, runtime-specific queue loss at restart or late terminal observation. Evidence does not reopen terminal receipts or prove arbitrary external quiescence. Busy Devin follow-ups retain receipt-scoped identity until an awaited start-record barrier at dequeue; an absent event is not proof of non-execution, and a terminal receipt is not permission to retry blindly. Same-key replay remains deduplicated. Existing `PROVIDER_QUOTA_EXHAUSTED` and broker `agent_end.errorClass`/`resetAt` semantics extend to Devin's free-model refusal, with reset guidance only when safely established. Devin's goal pauses on that refusal without autonomous retries; pre-existing independently queued messages retain their one FIFO attempt. No additional route, code, retry scheduler or provider reroute. Alert ownership classification is diagnostic only and does not release capacity.
 
 - **1.70.0** (minor — ANTIGRAVITY-POST-TURN-WORK-PLAN P1b lane C, provider error classes; authorised by the plan of record, owner decision 22 Nov 2026: execute the plan end to end). Additive only:
   - **Why.** An Antigravity turn that failed because the provider refused it reached the run receipt as a generic `Error(reason)`, so the receipt's `errorCode` was always `RUNTIME_ERROR` and a parent could not tell "stop until the quota resets" from "wait, then retry". Every long-horizon parent pays for that distinction: a quota-exhausted child retried in a loop burns turns and can never succeed, while a transient provider outage succeeds after a backoff.

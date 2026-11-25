@@ -341,34 +341,19 @@ Two independent latches, evaluated against the same reading:
 |---|---|---|
 | `heap_pressure` | `heapFraction >= OBSERVABILITY_HEALTH_ALERT_HEAP_FRACTION` (default `0.85` of `heap_size_limit`) | `heapFraction <= OBSERVABILITY_HEALTH_ALERT_HEAP_RECOVER_FRACTION` (default `0.75`) |
 | `event_loop_lag` | `lagP99Ms >= OBSERVABILITY_HEALTH_ALERT_LAG_P99_MS` (default `500`) | `lagP99Ms <= OBSERVABILITY_HEALTH_ALERT_LAG_RECOVER_MS` (default `200`) |
-| `turn_count_mismatch` (J3) | admission has held **more** active turns than the runtime telemetry for `OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS` consecutive readings (default `3`) | agreement has held for `OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_RECOVERY_READINGS` consecutive readings (default `2`) |
+| `turn_count_mismatch` (J3) | admission has **unexplained permits** after accounting for attached receipt leases, for `OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_READINGS` consecutive reliable readings (default `3`) | agreement has held for `OBSERVABILITY_HEALTH_ALERT_TURN_MISMATCH_RECOVERY_READINGS` consecutive reliable readings (default `2`) |
 
 The third row is the J3 leak detector (plan §6 J3 — a detector, not a fix). On
 2026-10-02 production's `/capacity` reported `activeTurns: 1` (class P2) for
 about 19 minutes while no session was busy, the drain counted 0 turns and 0
 nonterminal runs, and this metrics file's `activeTurns` read 0 throughout — a
-permit that is never released shrinks capacity silently until a restart. The
-sampler now records admission's counts (via `admissionCounts`, wired from the
-Internal API server through the read-only `activeCounts()` getter — correction
-02: `snapshot()` evaluates pressure and would move admission's heap latch)
-beside the operational counts. Each reading is in one of three states: **leak**
-(admission above the telemetry, by the total or any per-runtime count),
-**equal**, or **reverse** (telemetry above admission, no leak anywhere).
+permit that is never released shrinks capacity silently until a restart. The sampler records admission's counts through the side-effect-free `activeCounts()` getter, not `snapshot()` (which evaluates pressure). With the ownership source wired, it compares those counts in the same synchronous sample with actual attached leases in four disjoint categories: active, queued, terminal-draining and quarantined. The per-runtime positive remainder is **unexplained**; one runtime's reverse count cannot hide another runtime's excess. Joined receipts and queued Pi receipts without a permit do not count as permit owners. Receipt-counter telemetry remains diagnostic, not the ownership denominator.
 
-The detector is **one-sided**: leak readings arm the alert and only equal
-readings count towards recovery. Reverse readings — legitimate, because
-receipts can be joined to another turn's permit (a steer onto a busy session
-holds no permit of its own) — neither open nor close an incident, and a single
-leak reading is a turn-boundary race that breaks the arm run. Three consecutive
-leak readings (~90 s at the 30 s cadence) cannot be a turn-boundary race
-(acquire → receipt-record and terminalise → release are one async hop, at most
-one reading) nor the §11 quarantine fence (a cancel/fail with unconfirmed
-cessation holds the lease at most 30 s past terminalise). A leaked permit
-persists until a restart, so it pages. The alert message names admission's
-non-zero classes, the per-runtime admission-vs-telemetry detail and — when
-exposed — the oldest receipt-derived run's start (absent in exactly the leak
-case). Admission behaviour is unchanged; the fix waits for an attributed
-instance (owner rule: no fix without a reproduction).
+Terminal-held debt is deliberate safety behaviour, not by itself a leak. The initial drain window is bounded, but quarantine can retain capacity longer while the runtime remains busy or cessation is unknown. The existing reconciler releases it only after positive quiescence. The detector never releases permits and no extra debt-paging scheduler is added; `/capacity` retains debt-count/age diagnostics.
+
+The detector is **one-sided**: unexplained permits arm it; reliable agreement recovers it; reverse readings neither open nor close it. A wired but missing, malformed or inconsistent ownership/admission source is **unknown**, never zero: it preserves the open incident while breaking consecutive evidence and the continuous quiet clock. A genuinely unwired ownership feature retains the legacy receipt-counter comparison, explicitly labelled **unclassified**; its alert cannot establish a leaked permit. The debounce tolerates short acquire/attach boundaries but is not proof that every sustained mismatch is an orphan process. Preserve the original rule: fix a genuine leak only after attribution/reproduction.
+
+Disposable leak-injection proofs must set both `leakActiveTurns` and `leakRuntime` when ownership is wired. Omitting `leakRuntime` raises the total without matching per-runtime counts and intentionally exercises **unknown/inconsistent data**, not a classifiable phantom permit. Include a negative control proving this cannot falsely recover an open incident. No injector is enabled on production.
 
 Semantics: **one raw transition per crossing** (an `alert` when the high water
 mark is crossed, a `recovery` when the low water mark is cleared), never one

@@ -65,14 +65,16 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * owner exception row — the additive `PROVIDER_QUOTA_EXHAUSTED` /
  * `PROVIDER_TRANSIENT` error codes (the failed agy turn's `errorClass` /
  * `resetAt` ride the broker `agent_end`, outside the snapshot's shapes). The
- * ENFORCED fingerprint is
+ * snapshot is re-based at **1.71.0** (2026-11-25, queued-delivery robustness,
+ * owner plan-of-record exception): optional RunLivenessEvidence.delivery and
+ * RunDeliveryEvidence. Route/code sets unchanged. The ENFORCED fingerprint is
  * the SHA-256 of the snapshot's canonical shape: the parsed snapshot with the
  * top-level `contractVersion` field removed, serialised with recursively
  * sorted keys (so patch-bump regenerations that only move the version string
  * still match). The full-file hash is informational (kept at the 1.58.0
  * opening version for the record).
  */
-export const BASELINE_SHAPE_SHA256 = '84b929e432476753ff96987bcc0f1cf3eade75067044d8b6a45683b4dd2ba71d';
+export const BASELINE_SHAPE_SHA256 = '30bf51ea5c079ce47072d95744dc1e54f9ac054bbe205e47066771f6555b06db';
 export const BASELINE_FULL_SHA256 = 'fab83d8b2c237d0f8d43733dbeff60fb45c2ee690cfe7ca2b1cc044da4dc5fec';
 
 /** Sorted route keys of the snapshot at 1.58.0 (the window's route baseline). */
@@ -128,6 +130,7 @@ export const BASELINE_TYPES: readonly string[] = [
   'RunActivityObservation',
   'RunCessationEvidence',
   'RunCessationState',
+  'RunDeliveryEvidence',
   'RunLivenessEvidence',
   'RunOutputEvidence',
   'RunReceipt',
