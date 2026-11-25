@@ -17,6 +17,25 @@ import { devinSpawnEnv } from './devin-spawn-env.js';
 
 const logger = createLogger('DevinService');
 
+/** Default process idle window — mirrors `DEVIN_PROCESS_IDLE_SHUTDOWN_MS`'s
+ *  default in config.ts. */
+export const DEFAULT_PROCESS_IDLE_SHUTDOWN_MS = 300_000;
+
+/** Floor for the process idle window. A 0/1 ms window makes the busy re-arm
+ *  (lane E) a ~1 ms timer loop for the whole duration of a running turn. */
+export const MIN_PROCESS_IDLE_SHUTDOWN_MS = 1_000;
+
+/** Lane E review r1 finding F1: a misconfigured window must not become a ~1 ms
+ *  timer loop. Non-finite (NaN / ±Infinity — what `parseInt` yields for a
+ *  non-numeric `DEVIN_PROCESS_IDLE_SHUTDOWN_MS`) falls back to the config
+ *  default; a finite value below the floor is raised to it; anything else is
+ *  unchanged. Applied where the service reads the window, so the constructor
+ *  option is clamped as well. */
+export function clampProcessIdleShutdownMs(raw: number): number {
+  if (!Number.isFinite(raw)) return DEFAULT_PROCESS_IDLE_SHUTDOWN_MS;
+  return raw < MIN_PROCESS_IDLE_SHUTDOWN_MS ? MIN_PROCESS_IDLE_SHUTDOWN_MS : raw;
+}
+
 /** Structured outcome of an auxiliary `devin` subprocess run (`--version`,
  *  `models list`). Never throws for a non-zero exit or a timeout. */
 export interface DevinResult {
@@ -210,7 +229,7 @@ export class DevinService {
     this.maxSessions = config.devinMaxSessions;
     this.cleanupIntervalMs = opts.cleanupIntervalMs ?? config.devinCleanupIntervalMs;
     this.promptTimeoutMs = config.devinPromptTimeoutMs;
-    this.processIdleShutdownMs = opts.processIdleShutdownMs ?? config.devinProcessIdleShutdownMs;
+    this.processIdleShutdownMs = clampProcessIdleShutdownMs(opts.processIdleShutdownMs ?? config.devinProcessIdleShutdownMs);
     this.startCleanupInterval();
   }
 

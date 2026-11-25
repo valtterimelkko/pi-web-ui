@@ -4,7 +4,7 @@ import { Writable } from 'stream';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DevinService } from '../../../src/devin/devin-service.js';
+import { DevinService, clampProcessIdleShutdownMs, DEFAULT_PROCESS_IDLE_SHUTDOWN_MS, MIN_PROCESS_IDLE_SHUTDOWN_MS } from '../../../src/devin/devin-service.js';
 import { setLogTap, type LogRecord } from '../../../src/logging/logger.js';
 
 /**
@@ -55,6 +55,14 @@ class FakeChild extends EventEmitter {
 }
 
 const tick = (ms = 3) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** The service clamps the idle window to this floor (review r1 F1: a 0/1/NaN
+ *  window turned the busy re-arm into a ~1 ms timer loop). Every reap test uses
+ *  the floor so it also exercises the clamp — a smaller window would silently
+ *  become this one. */
+const IDLE_WINDOW_MS = 1000;
+/** Generous upper bound for "the child was stopped after the window". */
+const STOP_TIMEOUT_MS = 2500;
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5000, label = 'condition'): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -199,37 +207,37 @@ describe('devin idle process reaping (lane E)', () => {
   });
 
   it('T1: a turn longer than the idle window is never reaped mid-turn and is stopped about one window after it ends', async () => {
-    const WINDOW = 120;
+    const WINDOW = IDLE_WINDOW_MS;
     const h = newHarness({ processIdleShutdownMs: WINDOW });
     const { sessionId } = await h.service.createSession('/ws');
     const child = await startTurn(h, sessionId);
 
-    // Hold the turn for three idle windows: the spawn-time timer has fired
-    // (twice) while the session was busy.
-    await tick(WINDOW * 3);
+    // Hold the turn past the idle window: the spawn-time timer fires while the
+    // session is busy.
+    await tick(WINDOW + Math.floor(WINDOW / 2));
     expect(child.signals).toEqual([]);
     expect(h.service.isRunning(sessionId)).toBe(true);
 
     child.respondLast(promptResult());
     await turnDone(child);
     const endedAt = Date.now();
-    await waitFor(() => child.signals.length > 0, 1500, 'idle child stopped after the turn');
+    await waitFor(() => child.signals.length > 0, STOP_TIMEOUT_MS, 'idle child stopped after the turn');
     const elapsed = Date.now() - endedAt;
     // Stopped in bounded time after the LAST activity — not left resident
     // (the bug), and not killed the instant the turn ended.
     expect(elapsed).toBeGreaterThanOrEqual(Math.floor(WINDOW * 0.4));
-    expect(elapsed).toBeLessThanOrEqual(1500);
+    expect(elapsed).toBeLessThanOrEqual(STOP_TIMEOUT_MS);
     expect(child.signals).toContain('SIGTERM');
   });
 
   it('T2: a timer that fires while the session is busy with a queued follow-up is not dropped — the child stops after the queue drains', async () => {
-    const WINDOW = 120;
+    const WINDOW = IDLE_WINDOW_MS;
     const h = newHarness({ processIdleShutdownMs: WINDOW });
     const { sessionId } = await h.service.createSession('/ws');
     const child = await startTurn(h, sessionId, 'first');
 
     // Queue a follow-up while the long turn runs (past the idle window).
-    await tick(WINDOW * 3);
+    await tick(WINDOW + Math.floor(WINDOW / 2));
     expect(await h.service.followUp(sessionId, 'queued-second', () => undefined, () => undefined)).toBe(true);
     expect(child.signals).toEqual([]);
 
@@ -242,29 +250,29 @@ describe('devin idle process reaping (lane E)', () => {
     });
     await queuedCompleted;
     // The drained turn is running: still no reap.
-    await tick(WINDOW * 2);
+    await tick(WINDOW + Math.floor(WINDOW / 2));
     expect(child.signals).toEqual([]);
 
     child.respondLast(promptResult());
     await waitFor(() => !h.service.isRunning(sessionId), 3000, 'session idle after the drain');
-    await waitFor(() => child.signals.length > 0, 1500, 'child stopped after the drain');
+    await waitFor(() => child.signals.length > 0, STOP_TIMEOUT_MS, 'child stopped after the drain');
     expect(child.signals).toContain('SIGTERM');
   });
 
   it('T3: queue drain — the window counts from the end of the LAST drained item, never from the first turn', async () => {
-    const WINDOW = 120;
+    const WINDOW = IDLE_WINDOW_MS;
     const h = newHarness({ processIdleShutdownMs: WINDOW });
     const { sessionId } = await h.service.createSession('/ws');
     const child = await startTurn(h, sessionId, 'first');
 
-    await tick(WINDOW * 2);
+    await tick(WINDOW);
     expect(await h.service.followUp(sessionId, 'second', () => undefined, () => undefined)).toBe(true);
     expect(await h.service.followUp(sessionId, 'third', () => undefined, () => undefined)).toBe(true);
     child.respondLast(promptResult());
     await waitForSent(child, 'session/prompt', 2);
 
     // Second item runs longer than the window; third is still queued.
-    await tick(WINDOW * 2);
+    await tick(WINDOW + Math.floor(WINDOW / 2));
     expect(child.signals).toEqual([]);
     child.respondLast(promptResult());
     await waitForSent(child, 'session/prompt', 3);
@@ -274,10 +282,10 @@ describe('devin idle process reaping (lane E)', () => {
     child.respondLast(promptResult());
     const lastEndedAt = Date.now();
     await waitFor(() => !h.service.isRunning(sessionId), 3000, 'queue drained and idle');
-    await waitFor(() => child.signals.length > 0, 1500, 'child stopped after the last drained item');
+    await waitFor(() => child.signals.length > 0, STOP_TIMEOUT_MS, 'child stopped after the last drained item');
     const elapsed = Date.now() - lastEndedAt;
     expect(elapsed).toBeGreaterThanOrEqual(Math.floor(WINDOW * 0.4));
-    expect(elapsed).toBeLessThanOrEqual(1500);
+    expect(elapsed).toBeLessThanOrEqual(STOP_TIMEOUT_MS);
   });
 
   it('T4a: the sweep stops an idle client whose timer never fired, even with a browser subscriber attached', async () => {
@@ -334,31 +342,29 @@ describe('devin idle process reaping (lane E)', () => {
   it('T5: each idle shutdown writes exactly one info line carrying the session id and the idle duration', async () => {
     const records: LogRecord[] = [];
     setLogTap((record) => records.push(record));
-    const WINDOW = 60;
-    const h = newHarness({ processIdleShutdownMs: WINDOW });
+    const h = newHarness({ processIdleShutdownMs: IDLE_WINDOW_MS });
     const { sessionId } = await h.service.createSession('/ws');
     const child = await startTurn(h, sessionId);
-    await tick(WINDOW * 2);
+    await tick(IDLE_WINDOW_MS + 200);
     child.respondLast(promptResult());
     await turnDone(child);
-    await waitFor(() => child.signals.length > 0, 1500, 'child stopped');
+    await waitFor(() => child.signals.length > 0, STOP_TIMEOUT_MS, 'child stopped');
 
     const reaps = records.filter((r) => r.component === 'DevinService' && r.level === 'info' && /process idle shutdown/i.test(r.msg));
     expect(reaps).toHaveLength(1);
     expect(reaps[0]!.msg).toContain(sessionId);
     expect(reaps[0]!.msg).toMatch(/idleMs=\d+/);
     const idleMs = Number(/idleMs=(\d+)/.exec(reaps[0]!.msg)![1]);
-    expect(idleMs).toBeGreaterThanOrEqual(WINDOW);
+    expect(idleMs).toBeGreaterThanOrEqual(IDLE_WINDOW_MS);
   });
 
   it('T6: the next prompt after an idle shutdown respawns and resumes the same native session via session/load', async () => {
-    const WINDOW = 60;
-    const h = newHarness({ processIdleShutdownMs: WINDOW });
+    const h = newHarness({ processIdleShutdownMs: IDLE_WINDOW_MS });
     const { sessionId } = await h.service.createSession('/ws');
     const first = await startTurn(h, sessionId, 'first');
     first.respondLast(promptResult());
     await turnDone(first);
-    await waitFor(() => first.signals.length > 0, 1500, 'idle child reaped');
+    await waitFor(() => first.signals.length > 0, STOP_TIMEOUT_MS, 'idle child reaped');
     expect(h.children).toHaveLength(1);
 
     const second = await startTurn(h, sessionId, 'second', 1);
@@ -370,5 +376,60 @@ describe('devin idle process reaping (lane E)', () => {
     await turnDone(second);
     const replay = await h.service.getReplayEvents(sessionId);
     expect(replay.filter((e) => (e as { type?: string }).type === 'agent_end').length).toBeGreaterThanOrEqual(2);
+  });
+
+  // ── review r1 finding F1: clamp the process idle window at the read site ───
+
+  it('C1 (RED before the clamp): a sub-floor window (1 ms) does not reap the child the moment the turn ends', async () => {
+    const h = newHarness({ processIdleShutdownMs: 1 });
+    const { sessionId } = await h.service.createSession('/ws');
+    const child = await startTurn(h, sessionId);
+    child.respondLast(promptResult());
+    await turnDone(child);
+    const endedAt = Date.now();
+
+    // A 1 ms window reaps immediately — and, while busy, spins a 1 ms re-arm
+    // loop for the whole turn (review finding F1). The floor is 1000 ms.
+    await tick(300);
+    expect(child.signals).toEqual([]);
+    await waitFor(() => child.signals.length > 0, STOP_TIMEOUT_MS, 'child stopped at the clamped floor');
+    const elapsed = Date.now() - endedAt;
+    expect(elapsed).toBeGreaterThanOrEqual(700);
+    expect(elapsed).toBeLessThanOrEqual(STOP_TIMEOUT_MS);
+  });
+
+  it('C2 (RED before the clamp): a non-finite window (NaN, what a non-numeric env value parses to) falls back to the 300000 ms default', async () => {
+    const h = newHarness({ processIdleShutdownMs: Number.NaN });
+    const { sessionId } = await h.service.createSession('/ws');
+    const child = await startTurn(h, sessionId);
+    child.respondLast(promptResult());
+    await turnDone(child);
+    const endedAt = Date.now();
+
+    // NaN (and 0) would fire the timer on the next tick — the child must survive.
+    await tick(300);
+    expect(child.signals).toEqual([]);
+
+    // The effective window is the 300000 ms default, not the 1000 ms floor:
+    // 290 s of idleness must NOT reap, 305 s must.
+    expect(h.service.sweepIdleProcesses(endedAt + 290_000)).toBe(0);
+    expect(child.signals).toEqual([]);
+    expect(h.service.sweepIdleProcesses(endedAt + 305_000)).toBe(1);
+    expect(child.signals).toContain('SIGTERM');
+  });
+
+  it('C3: the clamp itself — non-finite → 300000, finite below 1000 → 1000, otherwise unchanged', () => {
+    expect(clampProcessIdleShutdownMs(Number.NaN)).toBe(300_000);
+    expect(clampProcessIdleShutdownMs(Number.POSITIVE_INFINITY)).toBe(300_000);
+    expect(clampProcessIdleShutdownMs(Number.NEGATIVE_INFINITY)).toBe(300_000);
+    expect(clampProcessIdleShutdownMs(0)).toBe(1_000);
+    expect(clampProcessIdleShutdownMs(1)).toBe(1_000);
+    expect(clampProcessIdleShutdownMs(-5)).toBe(1_000);
+    expect(clampProcessIdleShutdownMs(999)).toBe(1_000);
+    expect(clampProcessIdleShutdownMs(1_000)).toBe(1_000);
+    expect(clampProcessIdleShutdownMs(1_001)).toBe(1_001);
+    expect(clampProcessIdleShutdownMs(300_000)).toBe(300_000);
+    expect(DEFAULT_PROCESS_IDLE_SHUTDOWN_MS).toBe(300_000);
+    expect(MIN_PROCESS_IDLE_SHUTDOWN_MS).toBe(1_000);
   });
 });
