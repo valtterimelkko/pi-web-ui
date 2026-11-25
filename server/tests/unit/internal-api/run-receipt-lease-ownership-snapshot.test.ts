@@ -373,3 +373,85 @@ describe('lane A correction 05 §1 — bounded acceptance ceiling', () => {
     expect(after.liveness?.delivery).toMatchObject({ state: 'cancelled_before_dispatch', basis: 'targeted_removal' });
   });
 });
+
+/**
+ * Lane A correction 06 §1 (review finding 1) — the fence must not overwrite a run
+ * that starts while the dispatch barrier is mid-persist.
+ *
+ * The store refreshes its cache AFTER `persist`, and `markStarted` holds the run
+ * lock across that persist. The fence checked `status === 'queued'` OUTSIDE the
+ * lock, so it saw the stale cached `queued`, waited for the lock, and then wrote
+ * `failed / NEVER_STARTED / unconfirmed` onto a run that had just started and was
+ * about to execute: the receipt said "never started" while the item ran.
+ */
+describe('lane A correction 06 §1 — the fence re-checks queued inside the run lock', () => {
+  let dir: string;
+  let now: number;
+  let m: RunReceiptManager;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-lane-a-fence-race-'));
+    now = Date.now();
+  });
+
+  afterEach(async () => {
+    await m.shutdown().catch(() => undefined);
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  it('a barrier starting mid-fence leaves the run `started`, never NEVER_STARTED/unconfirmed', async () => {
+    const store = new RunReceiptStore(path.join(dir, 'receipts'), { now: () => now });
+    m = new RunReceiptManager({
+      store, now: () => now,
+      turnIdleTimeoutMs: 900_000, turnMaxMs: 60_000, runStartWindowMs: 600_000,
+      dispatchBarrierGraceMs: 1,
+    });
+    await m.init();
+
+    const run = await m.beginRun({
+      sessionId: 's', runtime: 'devin', executionInstanceId: 'd',
+      model: 'x', message: 'm', mode: 'follow_up', verbosity: 'answers',
+      detach: true, dispatchMode: 'follow_up',
+    });
+    const id = run.receipt.runId;
+    await m.markQueued(id);
+    m.attachLease(id, { release: () => undefined });
+    m.setCancelQueuedDelivery(async () => 'dispatched');
+
+    // First tick past the ceiling: records the reservation only.
+    now += 70_000;
+    await (m as unknown as { reconcileStalledRuns(): Promise<void> }).reconcileStalledRuns();
+    expect(m.get(id)!.status).toBe('queued');
+
+    // Gate the `started` persist: markStarted takes the run lock and stalls here,
+    // so the stored cache is still `queued` when the fence ticks.
+    let releaseStarted!: () => void;
+    let enteredStarted!: () => void;
+    const released = new Promise<void>((r) => { releaseStarted = r; });
+    const entered = new Promise<void>((r) => { enteredStarted = r; });
+    const original = store.transition.bind(store);
+    vi.spyOn(store, 'transition').mockImplementation(async (runId, status, patch) => {
+      if (status === 'started' && runId === id) {
+        enteredStarted();
+        await released;
+      }
+      return original(runId, status, patch);
+    });
+
+    const starting = m.markStarted(id); // holds the run lock, mid-persist
+    await entered;
+
+    // The fence tick reads the stale `queued` cache and waits for the lock.
+    now += 100_000;
+    const fence = (m as unknown as { reconcileStalledRuns(): Promise<void> }).reconcileStalledRuns();
+
+    releaseStarted(); // the barrier's persist completes; the run is now `started`
+    await starting;
+    await fence;
+
+    const after = m.get(id)!;
+    expect(after.status, 'the fence must not overwrite a run that started').toBe('started');
+    expect(after.errorCode).not.toBe('NEVER_STARTED');
+    expect(after.liveness?.delivery?.state).not.toBe('unconfirmed');
+  });
+});
