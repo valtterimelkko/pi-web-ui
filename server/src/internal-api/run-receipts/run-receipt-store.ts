@@ -617,6 +617,7 @@ const DELIVERY_BASES = new Set([
   'queue_state_unknown',
   'memory_queue_lost_at_restart',
   'late_terminal',
+  'dispatch_barrier_expired',
 ]);
 const ACTIVITY_KEYS = new Set(['eventType', 'occurredAt', 'observedAt']);
 const WATCHDOG_KEYS = new Set(['reason', 'decidedAt', 'idleTimeoutMs', 'absoluteTimeoutMs', 'startWindowMs']);

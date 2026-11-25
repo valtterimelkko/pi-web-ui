@@ -586,3 +586,174 @@ describe('lane A — receipt-scoped terminal cleanup (correction §3)', () => {
     expect(devin.cancelQueuedItem).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Lane A correction 05 §2 — a terminal receipt must not pass the dispatch barrier.
+ *
+ * The parent's probe (`../reviews/a-parent-terminal-barrier-probe.patch`) showed
+ * that `cancelRun` followed by the queued item's `onDispatched()` RESOLVED
+ * instead of rejecting: `markStarted` returns an already-terminal receipt
+ * unchanged, and the callback ignored the returned state. The item, having been
+ * shifted out of the queue, could then execute after cancellation or expiry.
+ *
+ * The barrier must positively verify that the receipt it just stamped is
+ * STARTED. Terminal or missing means the run has already been decided, so the
+ * barrier rejects and the service performs NO runtime side effect — while
+ * unrelated neighbours survive.
+ */
+describe('lane A correction 05 §2 — terminal receipts cannot pass the barrier', () => {
+  let dir: string;
+  let runReceipts: RunReceiptManager;
+  let devin: Record<string, any>;
+  let routes: ReturnType<typeof createSessionRoutes>;
+  /** Runtime side-effect witness: every prompt that actually reached the runtime. */
+  let executed: string[];
+  let held: Map<string, Map<string, 'queued' | 'dispatched'>>;
+  let barriers: Map<string, { sessionId: string; message: string; opts?: { itemId?: string; onDispatched?: () => Promise<void> | void } }>;
+
+  const devinEntry = {
+    id: 'devin-1', path: 'devin-1', sdkType: 'devin', cwd: '/tmp',
+    firstMessage: '', messageCount: 0, status: 'idle', createdAt: '', lastActivity: '',
+  };
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-lane-a-barrier-'));
+    executed = [];
+    held = new Map();
+    barriers = new Map();
+    devin = {
+      isRunning: vi.fn(() => true),
+      // Models the REAL boundary: the item is reserved in the queue and its
+      // awaited barrier runs at DEQUEUE time, not at enqueue time, so the test
+      // can decide in between whether that item may still execute.
+      followUp: vi.fn(async (
+        sessionId: string, message: string, _b: unknown, _c: unknown,
+        opts?: { itemId?: string; onDispatched?: () => Promise<void> | void },
+      ) => {
+        const items = held.get(sessionId) ?? new Map<string, 'queued' | 'dispatched'>();
+        const itemId = opts?.itemId ?? 'anon';
+        items.set(itemId, 'queued');
+        held.set(sessionId, items);
+        barriers.set(itemId, { sessionId, message, opts });
+        return true;
+      }),
+      cancelQueuedItem: vi.fn((sessionId: string, itemId: string) => {
+        const items = held.get(sessionId);
+        const state = items?.get(itemId);
+        if (state === undefined) return 'unknown' as const;
+        if (state === 'dispatched') return 'dispatched' as const;
+        items!.delete(itemId);
+        return 'removed' as const;
+      }),
+      getSessionStats: vi.fn(async () => undefined),
+      isSessionPinned: vi.fn(() => false),
+      getServedModel: vi.fn(async () => 'swe-2-flash-medium'),
+      abort: vi.fn(),
+    };
+    const registry = {
+      get: vi.fn(async (id: string) => {
+        if (id === 'devin-1') return devinEntry;
+        if (id.startsWith('child-')) return { ...devinEntry, id, path: id, sdkType: 'pi' };
+        return undefined;
+      }),
+      upsert: vi.fn(async () => undefined),
+      listAll: vi.fn(async () => []),
+    };
+    runReceipts = new RunReceiptManager({ store: new RunReceiptStore(path.join(dir, 'receipts')) });
+    routes = createSessionRoutes({
+      claudeService: { executionBackend: () => 'sdk-subscription', isRunning: () => false } as never,
+      opencodeService: {} as never,
+      antigravityService: {} as never,
+      multiSessionManager: {
+        addApiObserver: vi.fn(), removeApiObserver: vi.fn(), pinSession: vi.fn(() => true),
+        unpinSession: vi.fn(() => true), subscribeClient: vi.fn(async () => ({ status: 'idle' })),
+        unsubscribeClient: vi.fn(async () => undefined), getSessionStatus: vi.fn(() => ({ status: 'idle' })),
+        getAgentSession: vi.fn(() => undefined),
+      } as never,
+      sessionRegistry: registry as never,
+      piService: {} as never,
+      internalClientId: 'test',
+      watchDir: path.join(dir, 'watches'),
+      runReceiptManager: runReceipts,
+      devinService: devin as never,
+    });
+  });
+
+  afterEach(async () => {
+    await runReceipts.shutdown().catch(() => undefined);
+    await flush(150);
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  /** Dequeue the way the service does: awaited barrier FIRST, side effect second. */
+  const dequeue = async (runId: string) => {
+    const entry = barriers.get(runId)!;
+    await entry.opts!.onDispatched!(); // rejects on a terminal receipt
+    held.get(entry.sessionId)!.set(runId, 'dispatched');
+    executed.push(entry.message);
+  };
+
+  const queueOne = async (message: string) => {
+    const res = createMockRes();
+    await routes.handleSendPrompt(
+      createJsonReq('POST', '/api/v1/sessions/devin-1/prompt', { message, mode: 'follow_up', detach: true }),
+      res, 'devin-1',
+    );
+    expect(res.statusCode).toBe(202);
+    await waitUntil(() => devin.followUp.mock.calls.length >= 1, 'the message to reach the queue');
+    const call = devin.followUp.mock.calls.at(-1) as unknown as [
+      string, string, unknown, unknown, { itemId: string; onDispatched: () => Promise<void> },
+    ];
+    return { runId: call[4].itemId, opts: call[4] };
+  };
+
+  it('PARENT PROBE: onDispatched rejects after cancelRun, and the message never executes', async () => {
+    const { runId } = await queueOne('cancelled before dispatch');
+    await runReceipts.cancelRun(runId);
+    expect(runReceipts.get(runId)!.status).toBe('cancelled');
+
+    await expect(dequeue(runId)).rejects.toThrow();
+
+    await flush(300);
+    expect(executed).not.toContain('cancelled before dispatch');
+    // The terminal decision is preserved, not overwritten by a late `started`.
+    expect(runReceipts.get(runId)!.status).toBe('cancelled');
+  });
+
+  it('rejects after an acceptance-ceiling expiry, with no late execution', async () => {
+    const { runId } = await queueOne('expired before dispatch');
+    // Terminalise through the ceiling's own terminal shape, not only cancelRun.
+    await runReceipts.finish(runId, { status: 'cancelled', cessationBasis: 'documented_handler_return' });
+    expect(runReceipts.get(runId)!.status).toBe('cancelled');
+
+    await expect(dequeue(runId)).rejects.toThrow();
+    await flush(300);
+    expect(executed).not.toContain('expired before dispatch');
+  });
+
+  it('a DELAYED legitimate barrier still dispatches, and the neighbour survives', async () => {
+    const first = await queueOne('slow but legitimate');
+    const second = await queueOne('the neighbour');
+    expect(held.get('devin-1')?.has(second.runId)).toBe(true);
+
+    // The barrier is genuinely delayed, not skipped.
+    await new Promise((r) => setTimeout(r, 60));
+    await dequeue(first.runId);
+
+    expect(runReceipts.get(first.runId)!.status).toBe('started');
+    expect(runReceipts.get(first.runId)!.liveness?.delivery).toMatchObject({ state: 'dispatched', basis: 'dequeue' });
+    expect(executed).toContain('slow but legitimate');
+    // The neighbour is untouched by the first item's barrier; nothing was aborted.
+    expect(held.get('devin-1')?.has(second.runId)).toBe(true);
+    expect(runReceipts.get(second.runId)!.status).not.toBe('cancelled');
+    expect(devin.abort).not.toHaveBeenCalled();
+  });
+
+  it('rejects a MISSING receipt (deleted between queue and dequeue)', async () => {
+    const { runId } = await queueOne('vanished');
+    const spy = vi.spyOn(runReceipts, 'markStarted').mockResolvedValueOnce(undefined);
+    await expect(dequeue(runId)).rejects.toThrow();
+    expect(executed).not.toContain('vanished');
+    spy.mockRestore();
+  });
+});

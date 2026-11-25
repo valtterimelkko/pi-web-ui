@@ -204,6 +204,21 @@ class DevinFollowUpRaceError extends Error {
 }
 
 /**
+ * Correction 05 §2: the queued item's awaited dispatch barrier refused to let the
+ * prompt through, because the receipt it stamped was terminal or missing. The
+ * runtime side effect for this item did NOT happen.
+ */
+class DevinDispatchStampError extends Error {
+  constructor(
+    public readonly itemId: string,
+    public readonly cause: Error,
+  ) {
+    super(`Queued follow-up ${itemId} was not dispatched: ${cause.message}`);
+    this.name = 'DevinDispatchStampError';
+  }
+}
+
+/**
  * C2 (contract 1.57.0): the run's receipt reached a terminal state but the
  * runtime adapter never handed the synchronous dispatch chain back within the
  * post-terminal settle window — the R2 input shape (a terminal receipt with
@@ -3639,8 +3654,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     try {
       const outcome = devinService.cancelQueuedItem(sessionId, runId);
       if (outcome === 'removed') {
-        await runReceipts.markItemRemoved(runId);
-        logger.info(`[InternalAPI] Terminal receipt ${runId} released its still-queued item (never executed)`);
+        // Correction 05, non-blocking evidence issue: this receipt is ALREADY
+        // terminal, and `markItemRemoved` deliberately returns a terminal receipt
+        // unchanged. Calling it here recorded nothing, so the earlier handback's
+        // claim that it "records the honest outcome" was simply not true.
+        //
+        // The removal itself is still real and still worth doing — the item can
+        // no longer execute. But the delivery evidence is NOT rewritten: the
+        // receipt's own terminal decision stands, and no capacity is released on
+        // the strength of a claim it cannot support.
+        logger.info(`[InternalAPI] Terminal receipt ${runId} released its still-queued item (never executed); existing terminal delivery evidence left intact`);
       } else if (outcome === 'dispatched') {
         logger.info(`[InternalAPI] Terminal receipt ${runId} lost the dequeue race; its item is executing and was left alone`);
       } else {
@@ -7694,7 +7717,27 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
               ...(runId
                 ? {
                     onDispatched: async () => {
-                      await runReceipts.markStarted(runId);
+                      // Correction 05 §2 (parent probe): `markStarted` returns an
+                      // already-terminal receipt UNCHANGED. Ignoring that return
+                      // let a cancelled or expired item — already shifted out of
+                      // the queue — resolve the barrier and then EXECUTE after
+                      // the decision was made.
+                      //
+                      // The barrier must positively verify what it stamped. A
+                      // terminal or missing receipt means the run has already
+                      // been decided, so it rejects and the service performs no
+                      // runtime side effect for this item.
+                      const stamped = await runReceipts.markStarted(runId);
+                      if (!stamped || stamped.status !== 'started') {
+                        throw new DevinDispatchStampError(
+                          runId,
+                          new Error(
+                            stamped
+                              ? `receipt is already ${stamped.status}, not started`
+                              : 'receipt no longer exists',
+                          ),
+                        );
+                      }
                     },
                   }
                 : {}),

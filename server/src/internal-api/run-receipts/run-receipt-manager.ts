@@ -40,6 +40,9 @@ const DEFAULT_TURN_MAX_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_RUN_START_WINDOW_MS = 120 * 1000;
 const DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 const DEFAULT_DRAIN_POLL_MS = 1_000;
+/** Correction 05 §1: bounded grace for a service-reserved item to complete its
+ *  awaited dispatch barrier before the frozen acceptance budget fences it. */
+const DEFAULT_DISPATCH_BARRIER_GRACE_MS = 60_000;
 /**
  * L1 (contract 1.59.0): reconciliation cadence for quarantined admission
  * leases. Quarantine used to be terminal — the slot was held until restart —
@@ -124,6 +127,9 @@ export interface RunReceiptManagerDeps {
   drainTimeoutMs?: number;
   /** Drain quiescence poll interval. Default 1000. */
   drainPollMs?: number;
+  /** Correction 05 §1: grace for a service-reserved queued item to complete its
+   *  awaited dispatch barrier before the acceptance ceiling fences it. Default 60000. */
+  dispatchBarrierGraceMs?: number;
   /** L1: reconcile cadence for quarantined (never-confirmed) leases. Default 60000. */
   quarantineReconcileMs?: number;
   /**
@@ -217,6 +223,9 @@ interface ActiveRun {
   /** Lane B (2026-11-22): how many times the idle rule has been deferred for
    *  known background work. Rate-bounds the info log (first, then every 10th). */
   stallDeferrals?: number;
+  /** Correction 05 §1: when the acceptance ceiling first found this queued run
+   *  service-reserved but not yet dispatch-barrier-confirmed. */
+  queuedCeilingReservedAtMs?: number;
 }
 
 /**
@@ -254,6 +263,7 @@ export class RunReceiptManager {
   private readonly isRuntimeQuiescent?: (sessionId: string) => Promise<boolean>;
   private readonly drainTimeoutMs: number;
   private readonly drainPollMs: number;
+  private readonly dispatchBarrierGraceMs: number;
   /** Draining runs: terminal but admission slot held pending runtime cessation. */
   private readonly draining = new Map<string, { release: () => void; timer: NodeJS.Timeout; quarantined: boolean; quarantinedAtMs?: number; sessionId: string; runtime?: SessionRuntime }>();
   private readonly quarantineReconcileMs: number;
@@ -296,6 +306,9 @@ export class RunReceiptManager {
     this.isRuntimeQuiescent = deps.isRuntimeQuiescent;
     this.drainTimeoutMs = positiveTimeout(deps.drainTimeoutMs, undefined, DEFAULT_DRAIN_TIMEOUT_MS);
     this.drainPollMs = positiveTimeout(deps.drainPollMs, undefined, DEFAULT_DRAIN_POLL_MS);
+    // Correction 05 §1: bounded grace for a service-reserved queued item to
+    // complete its awaited dispatch barrier before the acceptance budget fences it.
+    this.dispatchBarrierGraceMs = positiveTimeout(deps.dispatchBarrierGraceMs, undefined, DEFAULT_DISPATCH_BARRIER_GRACE_MS);
     this.quarantineReconcileMs = positiveTimeout(deps.quarantineReconcileMs, undefined, DEFAULT_QUARANTINE_RECONCILE_MS);
     this.hasKnownPendingWork = deps.hasKnownPendingWork;
     this.cancelQueuedDeliveryResolver = deps.cancelQueuedDelivery;
@@ -1056,10 +1069,43 @@ export class RunReceiptManager {
       }
     }
     if (outcome === 'dispatched') {
-      // The message is executing after all: the dispatch barrier will stamp
-      // `started` imminently, and the ordinary idle/absolute rules then apply on
-      // a later tick. Claiming non-execution here would be a lie.
-      logger.info(`Run ${runId} reached its queue ceiling but was dispatched before removal; deferring to the execution clocks`);
+      // Correction 05 §1 (parent probe): `dispatched` here means the service
+      // RESERVED the item (`activeQueueItems`) — it does NOT mean the awaited
+      // dispatch barrier completed. If the barrier never lands, `markStarted`
+      // never runs and returning on every tick let a queued run escape the
+      // frozen bounded acceptance budget indefinitely.
+      //
+      // A reservation is not a confirmed dispatch, so this is bounded: the first
+      // reservation is given a grace in which the barrier may still land (in
+      // which case the EXISTING execution clocks correctly take over), and after
+      // that the run is terminalised as UNCONFIRMED. Never as non-execution —
+      // the service may still run it — and never by aborting the session.
+      const reservedAtMs = active.queuedCeilingReservedAtMs;
+      if (reservedAtMs === undefined) {
+        active.queuedCeilingReservedAtMs = this.now();
+        logger.info(`Run ${runId} reached its queue ceiling but is reserved by the service; awaiting the dispatch barrier within its grace`);
+        return;
+      }
+      if (this.now() - reservedAtMs < this.dispatchBarrierGraceMs) return;
+      logger.warn(`Run ${runId} stayed reserved past the dispatch-barrier grace; terminalising as unconfirmed delivery`);
+      const reserved = this.store.get(runId);
+      if (!reserved || isTerminal(reserved.status) || reserved.status !== 'queued') return;
+      const fenced = await this.finish(runId, {
+        status: 'failed',
+        errorCode: 'NEVER_STARTED',
+        stallReason: 'absolute',
+        delivery: this.deliveryEvidence(reserved, 'unconfirmed', 'dispatch_barrier_expired'),
+      }).catch((error) => {
+        logger.warn(`failed to fence reserved queued run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      });
+      if (!fenced) return;
+      this.onRunNeverStarted?.(fenced);
+      for (const listener of this.neverStartedListeners) {
+        try { listener(fenced); } catch (error) {
+          logger.warn(`never-started listener failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       return;
     }
     const before = this.store.get(runId);

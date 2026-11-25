@@ -258,3 +258,118 @@ describe('RunReceiptManager.getLeaseOwnershipSnapshot (lane A correction §1)', 
     expect(m.hasActiveRun(baseInput.sessionId)).toBe(true);
   });
 });
+
+/**
+ * Lane A correction 05 §1 — the acceptance ceiling must stay BOUNDED.
+ *
+ * The parent's probe (`../reviews/a-parent-ceiling-probe.test.ts`) showed a
+ * queued item can escape the frozen bounded acceptance budget forever: the
+ * service reserves the item in `activeQueueItems` BEFORE the awaited
+ * `onDispatched` barrier runs, so a targeted cancellation answers `dispatched`.
+ * `expireQueuedRun` treated that as "executing after all" and simply returned on
+ * every tick, so `markStarted` never landed and the receipt stayed `queued` for
+ * any multiple of the absolute age.
+ *
+ * The honest bounded resolution: a reservation is NOT a confirmed dispatch. After
+ * a bounded grace past the ceiling the receipt is terminalised as UNCONFIRMED —
+ * never as non-execution (that would be a lie, the service may still run it) and
+ * never by aborting the session's unrelated work.
+ */
+describe('lane A correction 05 §1 — bounded acceptance ceiling', () => {
+  let dir: string;
+  let now: number;
+  let managers: RunReceiptManager[] = [];
+
+  /** Bind a queued run whose cancellation resolver always answers `dispatched`. */
+  const queuedWithReservation = async (m: RunReceiptManager) => {
+    const run = await m.beginRun({
+      sessionId: 's', runtime: 'devin', executionInstanceId: 'd', model: 'x', message: 'm',
+      mode: 'follow_up', verbosity: 'answers', detach: true, dispatchMode: 'follow_up',
+    });
+    const id = run.receipt.runId;
+    await m.markQueued(id);
+    m.attachLease(id, { release: () => undefined });
+    m.setCancelQueuedDelivery(async () => 'dispatched');
+    return id;
+  };
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-lane-a-ceiling-'));
+    now = Date.now(); // anchor at real time so acceptedAt is not in the future
+    managers = [];
+  });
+
+  afterEach(async () => {
+    for (const m of managers.splice(0)) await m.shutdown().catch(() => undefined);
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 });
+  });
+
+  const make = (overrides: Record<string, unknown> = {}) => {
+    const m = new RunReceiptManager({
+      store: new RunReceiptStore(dir, { now: () => now }), now: () => now,
+      // A positive start window: runStartWindowMs 0 is rejected by the
+      // receipt validation, so the fence's terminal write would fail silently.
+      turnIdleTimeoutMs: 900_000, turnMaxMs: 60_000, runStartWindowMs: 600_000,
+      dispatchBarrierGraceMs: 1, // deterministic: the bound is the property, not 60 s of wall clock
+      ...overrides,
+    });
+    managers.push(m);
+    return m;
+  };
+
+  it('PARENT PROBE: a reserved-but-never-stamped item cannot stay queued forever', async () => {
+    const m = make();
+    await m.init();
+    const id = await queuedWithReservation(m);
+
+    // Forward in time, past the absolute ceiling, repeatedly: the budget is
+    // frozen, so the run must eventually leave `queued` rather than returning
+    // forever merely because the service reserved it.
+    const start = now;
+    for (const t of [70_000, 100_000, 200_000, 400_000, 800_000]) {
+      now = start + t;
+      await (m as unknown as { reconcileStalledRuns(): Promise<void> }).reconcileStalledRuns();
+    }
+
+    const after = m.get(id)!;
+    expect(after.status, 'absolute acceptance budget must stay bounded').not.toBe('queued');
+    expect(after.status).toBe('failed');
+    // Honest: the service reserved it, so execution cannot be ruled out.
+    expect(after.liveness?.delivery).toMatchObject({ state: 'unconfirmed', basis: 'dispatch_barrier_expired' });
+    // Bound but NOT a lie about non-execution.
+    expect(after.liveness?.delivery?.state).not.toBe('cancelled_before_dispatch');
+  });
+
+  it('does not terminalise on the first reservation tick: a real dispatch still wins', async () => {
+    const m = make();
+    await m.init();
+    const id = await queuedWithReservation(m);
+    const base = now;
+
+    now = base + 70_000;
+    await (m as unknown as { reconcileStalledRuns(): Promise<void> }).reconcileStalledRuns();
+    // The FIRST reservation tick only records the intent: the barrier may still
+    // land, so the run is left alone.
+    expect(m.get(id)!.status).toBe('queued');
+
+    // The barrier lands late but legitimately: `started` is then governed by the
+    // EXISTING execution clocks, not by the acceptance ceiling.
+    await m.markStarted(id);
+    expect(m.get(id)!.status).toBe('started');
+    expect(m.get(id)!.liveness?.delivery).toMatchObject({ state: 'dispatched', basis: 'dequeue' });
+  });
+
+  it('a genuinely removed item still records PROVEN non-execution, unchanged', async () => {
+    const m = make();
+    await m.init();
+    const id = await queuedWithReservation(m);
+    m.setCancelQueuedDelivery(async () => 'removed');
+
+    now = now + 70_000;
+    await (m as unknown as { reconcileStalledRuns(): Promise<void> }).reconcileStalledRuns();
+
+    const after = m.get(id)!;
+    expect(after.status).toBe('cancelled');
+    expect(after.liveness?.delivery).toMatchObject({ state: 'cancelled_before_dispatch', basis: 'targeted_removal' });
+  });
+});

@@ -1191,7 +1191,10 @@ export type RunDeliveryBasis =
   | 'follow_up_race'
   | 'queue_state_unknown'
   | 'memory_queue_lost_at_restart'
-  | 'late_terminal';
+  | 'late_terminal'
+  /** Correction 05 §1: a service reservation whose awaited dispatch barrier
+   *  never completed; the acceptance ceiling fenced it as UNCONFIRMED. */
+  | 'dispatch_barrier_expired';
 
 export interface RunDeliveryEvidence {
   state: RunDeliveryState;
