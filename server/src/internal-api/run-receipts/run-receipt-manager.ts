@@ -6,6 +6,8 @@ import type {
   PromptMode,
   CommandCodeEffort,
   RunActivityObservation,
+  RunDeliveryBasis,
+  RunDeliveryEvidence,
   RunReceipt,
   RunReceiptStatus,
   RunWorkState,
@@ -38,6 +40,9 @@ const DEFAULT_TURN_MAX_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_RUN_START_WINDOW_MS = 120 * 1000;
 const DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 const DEFAULT_DRAIN_POLL_MS = 1_000;
+/** Correction 05 §1: bounded grace for a service-reserved item to complete its
+ *  awaited dispatch barrier before the frozen acceptance budget fences it. */
+const DEFAULT_DISPATCH_BARRIER_GRACE_MS = 60_000;
 /**
  * L1 (contract 1.59.0): reconciliation cadence for quarantined admission
  * leases. Quarantine used to be terminal — the slot was held until restart —
@@ -78,6 +83,13 @@ export interface RunFinishOutcome {
   stallReason?: RunStallReason;
   /** Explicit adapter-owned completion boundary for synchronous handlers. */
   cessationBasis?: 'documented_handler_return' | 'resource_quiescence';
+  /**
+   * Lane A (W1): the delivery fact this terminal transition establishes. When
+   * `cancelled_before_dispatch` is set the run provably never reached the
+   * runtime, so cessation is confirmed by the documented removal and the
+   * permit is released immediately instead of entering the drain fence.
+   */
+  delivery?: RunDeliveryEvidence;
 }
 
 export interface RunReceiptManagerDeps {
@@ -115,6 +127,9 @@ export interface RunReceiptManagerDeps {
   drainTimeoutMs?: number;
   /** Drain quiescence poll interval. Default 1000. */
   drainPollMs?: number;
+  /** Correction 05 §1: grace for a service-reserved queued item to complete its
+   *  awaited dispatch barrier before the acceptance ceiling fences it. Default 60000. */
+  dispatchBarrierGraceMs?: number;
   /** L1: reconcile cadence for quarantined (never-confirmed) leases. Default 60000. */
   quarantineReconcileMs?: number;
   /**
@@ -133,6 +148,13 @@ export interface RunReceiptManagerDeps {
    * deferral (today's behaviour). Other runtimes answer false in the wiring.
    */
   hasKnownPendingWork?: (sessionId: string, runtime: SessionRuntime) => boolean;
+  /**
+   * Lane A (W1): targeted removal of one queued delivery (see
+   * {@link RunReceiptManager.setCancelQueuedDelivery}). Optional at construction;
+   * the Internal API route binds it late, because only it holds the runtime
+   * services while the manager owns the receipt clock.
+   */
+  cancelQueuedDelivery?: (runId: string, sessionId: string, runtime: SessionRuntime) => Promise<'removed' | 'dispatched' | 'unknown'>;
 }
 
 /** C3a (contract 1.58.0): one run's completion capture, fanned out to the per-session surface. */
@@ -142,6 +164,22 @@ export interface CompletionCaptureNotification {
   runtime: SessionRuntime;
   /** The terminal receipt carrying `completion` / `completionError` (exactly one present). */
   receipt: RunReceipt;
+}
+
+/**
+ * Lane A correction §1: the disjoint lease-holding population per runtime.
+ *
+ * Every run counted here holds an admission permit RIGHT NOW. The four maps
+ * partition that population: `active` excludes queued receipts, and
+ * `quarantined` is the quarantined subset of `draining` (never also counted as
+ * draining). Their sum is the number of attached leases, which is what Lane B
+ * subtracts from the admission count.
+ */
+export interface LeaseOwnershipSnapshot {
+  activeByRuntime: Partial<Record<SessionRuntime, number>>;
+  queuedByRuntime: Partial<Record<SessionRuntime, number>>;
+  drainingByRuntime: Partial<Record<SessionRuntime, number>>;
+  quarantinedByRuntime: Partial<Record<SessionRuntime, number>>;
 }
 
 export type ExistingRunResult =
@@ -185,6 +223,9 @@ interface ActiveRun {
   /** Lane B (2026-11-22): how many times the idle rule has been deferred for
    *  known background work. Rate-bounds the info log (first, then every 10th). */
   stallDeferrals?: number;
+  /** Correction 05 §1: when the acceptance ceiling first found this queued run
+   *  service-reserved but not yet dispatch-barrier-confirmed. */
+  queuedCeilingReservedAtMs?: number;
 }
 
 /**
@@ -215,14 +256,29 @@ export class RunReceiptManager {
   private readonly neverStartedListeners: Array<(receipt: RunReceipt) => void> = [];
   /** C3a (contract 1.58.0): fired once per run whose output carried a completion block (parsed or rejected). */
   private readonly completionListeners: Array<(capture: CompletionCaptureNotification) => void> = [];
+  /** Lane A correction §3: fired for EVERY terminal transition, so a receipt-scoped
+   *  owner (the Devin follow-up branch) can release its own still-queued item
+   *  however the run ended — not only on the paths that remember to clean up. */
+  private readonly terminalListeners: Array<(receipt: RunReceipt) => void> = [];
   private readonly isRuntimeQuiescent?: (sessionId: string) => Promise<boolean>;
   private readonly drainTimeoutMs: number;
   private readonly drainPollMs: number;
+  private readonly dispatchBarrierGraceMs: number;
   /** Draining runs: terminal but admission slot held pending runtime cessation. */
   private readonly draining = new Map<string, { release: () => void; timer: NodeJS.Timeout; quarantined: boolean; quarantinedAtMs?: number; sessionId: string; runtime?: SessionRuntime }>();
   private readonly quarantineReconcileMs: number;
   /** Lane B: positive evidence of running background work owned by the runtime. */
   private readonly hasKnownPendingWork?: (sessionId: string, runtime: SessionRuntime) => boolean;
+  /**
+   * Lane A (W1): targeted removal of ONE queued delivery. The run manager knows
+   * a queued receipt exceeded its absolute acceptance ceiling; only the owning
+   * runtime can remove the actual queue entry. Returning `removed` is positive
+   * proof the message will never execute, so the receipt can say so and release
+   * only its own permit. `dispatched` means the dequeue won the race (the item
+   * is executing); `unknown` means neither is provable and the receipt must stay
+   * unconfirmed. Bindable after construction via `setCancelQueuedDelivery`.
+   */
+  private cancelQueuedDeliveryResolver?: (runId: string, sessionId: string, runtime: SessionRuntime) => Promise<'removed' | 'dispatched' | 'unknown'>;
   /** L1: one shared slow poll for every quarantined entry; running only while entries exist. */
   private quarantineReconciler?: NodeJS.Timeout;
 
@@ -250,8 +306,12 @@ export class RunReceiptManager {
     this.isRuntimeQuiescent = deps.isRuntimeQuiescent;
     this.drainTimeoutMs = positiveTimeout(deps.drainTimeoutMs, undefined, DEFAULT_DRAIN_TIMEOUT_MS);
     this.drainPollMs = positiveTimeout(deps.drainPollMs, undefined, DEFAULT_DRAIN_POLL_MS);
+    // Correction 05 §1: bounded grace for a service-reserved queued item to
+    // complete its awaited dispatch barrier before the acceptance budget fences it.
+    this.dispatchBarrierGraceMs = positiveTimeout(deps.dispatchBarrierGraceMs, undefined, DEFAULT_DISPATCH_BARRIER_GRACE_MS);
     this.quarantineReconcileMs = positiveTimeout(deps.quarantineReconcileMs, undefined, DEFAULT_QUARANTINE_RECONCILE_MS);
     this.hasKnownPendingWork = deps.hasKnownPendingWork;
+    this.cancelQueuedDeliveryResolver = deps.cancelQueuedDelivery;
   }
 
   async init(): Promise<void> {
@@ -286,6 +346,27 @@ export class RunReceiptManager {
    * rejected (`completionError`). The Internal API wiring uses it to feed the
    * per-session latest-completion surface with a `{ runId }` source.
    */
+  /**
+   * Lane A correction §3: observe EVERY terminal transition (completion,
+   * cancellation, stall, restart recovery, targeted removal). The callback must
+   * be cheap and must not throw; it runs after the terminal write settles.
+   */
+  addTerminalListener(listener: (receipt: RunReceipt) => void): void {
+    this.terminalListeners.push(listener);
+  }
+
+  private fireTerminalListeners(record: PersistedRunReceipt): void {
+    if (this.terminalListeners.length === 0) return;
+    const receipt = toPublicReceipt(record);
+    for (const listener of this.terminalListeners) {
+      try {
+        listener(receipt);
+      } catch (error) {
+        logger.warn(`terminal listener failed for run ${record.runId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
   addCompletionListener(listener: (capture: CompletionCaptureNotification) => void): void {
     this.completionListeners.push(listener);
   }
@@ -392,9 +473,97 @@ export class RunReceiptManager {
   async markQueued(runId: string): Promise<RunReceipt | undefined> {
     await this.init();
     return this.withRunLock(runId, async () => {
-      const queued = await this.store.transition(runId, 'queued');
+      const current = this.store.get(runId);
+      const delivery = this.deliveryEvidence(current, 'queued', 'follow_up_queue');
+      const queued = await this.store.transition(runId, 'queued', {
+        ...(current?.liveness ? { liveness: { ...current.liveness, delivery } } : {}),
+      });
       return toPublicReceipt(queued);
     });
+  }
+
+  /**
+   * Lane A (W1): record that the runtime dequeued the message and is about to
+   * execute it. The start clock begins here — not at acceptance — which is what
+   * keeps a legitimately queued item out of the start watchdog's reach.
+   */
+  async markDispatched(runId: string): Promise<RunReceipt | undefined> {
+    return this.markStarted(runId);
+  }
+
+  /**
+   * Lane A (W1): terminalise a queued run whose queue entry was PROVEN removed
+   * by the owning runtime before it could dispatch. This is positive evidence
+   * that the message never executed, so the run is `cancelled` with confirmed
+   * cessation (`documented_handler_return`) and releases only its own permit
+   * immediately — it must not enter the drain fence. The idempotency key is
+   * deliberately NOT burned (`rejectBeforeDispatch` would clear it): an
+   * at-least-once retry with the same key must replay this receipt instead of
+   * dispatching the same message twice.
+   */
+  async markItemRemoved(runId: string, basis: Extract<RunDeliveryBasis, 'targeted_removal' | 'follow_up_race'> = 'targeted_removal'): Promise<RunReceipt | undefined> {
+    await this.init();
+    return this.withRunLock(runId, async () => {
+      const current = this.store.get(runId);
+      if (!current) return undefined;
+      // A receipt that already ran (or was already terminal) cannot be proven
+      // to have been removed: report it unchanged rather than claim removal.
+      if (isTerminal(current.status)) return toPublicReceipt(current);
+      if (current.status === 'started') return toPublicReceipt(current);
+      return this.finishUnlocked(runId, {
+        status: 'cancelled',
+        cessationBasis: 'documented_handler_return',
+        delivery: this.deliveryEvidence(current, 'cancelled_before_dispatch', basis),
+      });
+    });
+  }
+
+  /**
+   * Lane A (W1): a Devin follow-up lost the race with turn completion. The
+   * service decided the session was no longer running, so the message provably
+   * never entered the queue — a KNOWN non-delivery (safe to retry), distinct
+   * from an unconfirmed one.
+   */
+  async markFollowUpRaceLost(runId: string): Promise<RunReceipt | undefined> {
+    return this.markItemRemoved(runId, 'follow_up_race');
+  }
+
+  /**
+   * Lane A (W1): terminalise a queued run whose delivery can no longer be
+   * established either way (the targeted cancel raced the dequeue, the session
+   * registry disappeared, a disconnect fenced the transport). The honest state
+   * is `unconfirmed`: the run is failed, cessation stays unconfirmed so the
+   * permit is held behind the drain fence, and no caller may treat it as safe
+   * to retry.
+   */
+  async markItemUnconfirmed(runId: string, basis: Extract<RunDeliveryBasis, 'queue_state_unknown' | 'follow_up_race'> = 'queue_state_unknown'): Promise<RunReceipt | undefined> {
+    await this.init();
+    return this.withRunLock(runId, async () => {
+      const current = this.store.get(runId);
+      if (!current) return undefined;
+      if (isTerminal(current.status)) return toPublicReceipt(current);
+      if (current.status === 'started') return toPublicReceipt(current);
+      return this.finishUnlocked(runId, {
+        status: 'failed',
+        errorCode: 'NEVER_STARTED',
+        stallReason: 'no_activity',
+        delivery: this.deliveryEvidence(current, 'unconfirmed', basis),
+      });
+    });
+  }
+
+  /**
+   * Lane A: build the delivery evidence for this transition, keeping the
+   * timestamp convention of every other liveness field (server observation
+   * time, not runtime event time).
+   */
+  private deliveryEvidence(
+    current: PersistedRunReceipt | undefined,
+    state: RunDeliveryEvidence['state'],
+    basis: RunDeliveryBasis,
+  ): RunDeliveryEvidence {
+    void current;
+    return { state, basis, observedAt: new Date(this.now()).toISOString() };
   }
 
   async markStarted(runId: string): Promise<RunReceipt | undefined> {
@@ -405,14 +574,22 @@ export class RunReceiptManager {
   private async markStartedUnlocked(runId: string): Promise<RunReceipt | undefined> {
     const current = this.store.get(runId);
     if (!current || isTerminal(current.status)) return current ? toPublicReceipt(current) : undefined;
-    if (current.status === 'started') return toPublicReceipt(current);
+    const wasQueued = current.liveness?.delivery?.state === 'queued';
+    if (current.status === 'started') {
+      // Already dispatched: only the delivery fact may still be behind (a fast
+      // runtime can emit its first event before the route's dispatch stamp).
+      if (!wasQueued) return toPublicReceipt(current);
+    }
     const startedAtMs = this.now();
     const started = await this.store.transition(runId, 'started', {
       startedAt: current.startedAt ?? new Date(startedAtMs).toISOString(),
+      ...(wasQueued && current.liveness
+        ? { liveness: { ...current.liveness, delivery: this.deliveryEvidence(current, 'dispatched', 'dequeue') } }
+        : {}),
     });
     const active = this.activeRuns.get(runId);
     if (active) {
-      active.startedAtMs = startedAtMs;
+      active.startedAtMs = active.startedAtMs ?? startedAtMs;
       active.lastActivityAtMs = startedAtMs;
     }
     return toPublicReceipt(started);
@@ -554,6 +731,7 @@ export class RunReceiptManager {
                   },
                 }
               : {}),
+          ...(outcome.delivery ? { delivery: outcome.delivery } : {}),
         }
       : undefined;
     const finalText = active?.finalText.snapshot();
@@ -740,14 +918,21 @@ export class RunReceiptManager {
     const now = this.now();
     for (const [runId, active] of Array.from(this.activeRuns)) {
       // C2 (contract 1.57.0): start detection. A DISPATCHED run (receipt
-      // status 'started' — markQueued/markStarted distinguish queue-pending
+      // status 'started' — markQueued/markDispatched distinguish queue-pending
       // from runtime dispatch) with no eligible activity ever observed is
       // known as NEVER_STARTED inside the start window, long before the idle
       // watchdog would report a stalled TURN that never existed. Queue-pending
-      // receipts are exempt: waiting in the Pi follow-up queue is legitimate,
-      // not a runtime that failed to start.
+      // receipts are exempt: waiting in the runtime's follow-up queue is
+      // legitimate, not a runtime that failed to start.
+      //
+      // Lane A (W1): the window is measured from DISPATCH, not acceptance. An
+      // item that waited in a FIFO queue for longer than the window and only
+      // then began executing must not be failed on the first tick after its
+      // dequeue (audit §2A: eight Devin wakes were failed exactly this way).
+      const startAnchorMs = active.startedAtMs ?? active.acceptedAtMs;
       const startWindowExceeded = this.runStartWindowMs > 0
-        && now - active.acceptedAtMs >= this.runStartWindowMs;
+        && active.startedAtMs !== undefined
+        && now - startAnchorMs >= this.runStartWindowMs;
       if (startWindowExceeded && neverProducedWork(active)) {
         const before = this.store.get(runId);
         if (!before || isTerminal(before.status) || before.status !== 'started') continue;
@@ -779,6 +964,21 @@ export class RunReceiptManager {
       if (!idleExceeded && !maxExceeded) continue;
       const before = this.store.get(runId);
       if (!before || isTerminal(before.status)) continue;
+      // Lane A (W1): a QUEUED receipt is a message waiting in a runtime-side
+      // FIFO queue. It has no execution authority of its own — it never
+      // dispatched a turn, so it can neither be "idle" nor abort the session's
+      // live turn (which belongs to whoever is executing). Exempting it from
+      // the execution clocks is the second half of the start-window fix: without
+      // it, the 900 s idle rule would fire on a legitimate queue wait and the
+      // handler's owner-abort would kill the unrelated running turn.
+      if (before.status === 'queued') {
+        // The absolute acceptance ceiling still bounds a queued item (a message
+        // must not wait forever), but it may only remove ITS OWN queue entry —
+        // never the session's live turn or its neighbours.
+        if (!maxExceeded) continue;
+        await this.expireQueuedRun(runId, active);
+        continue;
+      }
       // Lane B (2026-11-22): a runtime that still tracks running background work
       // is silent by design, so the IDLE rule is deferred — not the absolute
       // ceiling, and not the never-started branch above. Nothing is written and
@@ -837,6 +1037,121 @@ export class RunReceiptManager {
    * background work for this session. A missing, empty or throwing predicate is
    * "no evidence of pending work", so the watchdog behaves exactly as before.
    */
+  /**
+   * Lane A (W1): a queued receipt passed the absolute acceptance ceiling.
+   *
+   * A queued message holds no execution authority: it must never abort the
+   * session's live turn or disturb its FIFO neighbours. The only correct
+   * outcome is to ask the owning runtime to remove THIS item, then report what
+   * was actually proven — never more:
+   *
+   *  - `removed`   → the message provably will not execute. Cancelled with
+   *                  confirmed cessation, releasing only this run's permit. The
+   *                  idempotency key is deliberately kept so an at-least-once
+   *                  retry replays this receipt instead of dispatching twice.
+   *  - `dispatched`→ the dequeue won the race: the item really is executing, so
+   *                  the ordinary stalled-turn path applies (quarantine), not a
+   *                  non-execution claim.
+   *  - `unknown`   → neither is provable. Failed with delivery `unconfirmed` and
+   *                  cessation unconfirmed (permit held behind the fence); the
+   *                  notice forbids a blind re-dispatch.
+   */
+  private async expireQueuedRun(runId: string, active: ActiveRun): Promise<void> {
+    let outcome: 'removed' | 'dispatched' | 'unknown' = 'unknown';
+    if (this.cancelQueuedDeliveryResolver) {
+      try {
+        outcome = await this.cancelQueuedDeliveryResolver(runId, active.sessionId, active.runtime);
+      } catch (error) {
+        outcome = 'unknown';
+        logger.warn(
+          `targeted queue removal failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    if (outcome === 'dispatched') {
+      // Correction 05 §1 (parent probe): `dispatched` here means the service
+      // RESERVED the item (`activeQueueItems`) — it does NOT mean the awaited
+      // dispatch barrier completed. If the barrier never lands, `markStarted`
+      // never runs and returning on every tick let a queued run escape the
+      // frozen bounded acceptance budget indefinitely.
+      //
+      // A reservation is not a confirmed dispatch, so this is bounded: the first
+      // reservation is given a grace in which the barrier may still land (in
+      // which case the EXISTING execution clocks correctly take over), and after
+      // that the run is terminalised as UNCONFIRMED. Never as non-execution —
+      // the service may still run it — and never by aborting the session.
+      const reservedAtMs = active.queuedCeilingReservedAtMs;
+      if (reservedAtMs === undefined) {
+        active.queuedCeilingReservedAtMs = this.now();
+        logger.info(`Run ${runId} reached its queue ceiling but is reserved by the service; awaiting the dispatch barrier within its grace`);
+        return;
+      }
+      if (this.now() - reservedAtMs < this.dispatchBarrierGraceMs) return;
+      logger.warn(`Run ${runId} stayed reserved past the dispatch-barrier grace; terminalising as unconfirmed delivery`);
+      const reserved = this.store.get(runId);
+      if (!reserved || isTerminal(reserved.status) || reserved.status !== 'queued') return;
+      const fenced = await this.finish(runId, {
+        status: 'failed',
+        errorCode: 'NEVER_STARTED',
+        stallReason: 'absolute',
+        delivery: this.deliveryEvidence(reserved, 'unconfirmed', 'dispatch_barrier_expired'),
+      }).catch((error) => {
+        logger.warn(`failed to fence reserved queued run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      });
+      if (!fenced) return;
+      this.onRunNeverStarted?.(fenced);
+      for (const listener of this.neverStartedListeners) {
+        try { listener(fenced); } catch (error) {
+          logger.warn(`never-started listener failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      return;
+    }
+    const before = this.store.get(runId);
+    if (!before || isTerminal(before.status) || before.status !== 'queued') return;
+    const terminal = await this.finish(runId, outcome === 'removed'
+      ? {
+          status: 'cancelled',
+          errorCode: 'NEVER_STARTED',
+          cessationBasis: 'documented_handler_return',
+          delivery: this.deliveryEvidence(before, 'cancelled_before_dispatch', 'targeted_removal'),
+        }
+      : {
+          status: 'failed',
+          errorCode: 'NEVER_STARTED',
+          stallReason: 'absolute',
+          delivery: this.deliveryEvidence(before, 'unconfirmed', 'queue_state_unknown'),
+        }).catch((error) => {
+      logger.warn(`failed to terminalise expired queued run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    });
+    if (!terminal) return;
+    logger.warn(
+      `Run ${runId} expired while queued at the absolute acceptance ceiling: ${outcome === 'removed' ? 'item provably removed (never executed)' : 'delivery unconfirmed'}`,
+    );
+    this.onRunNeverStarted?.(terminal);
+    for (const listener of this.neverStartedListeners) {
+      try {
+        listener(terminal);
+      } catch (error) {
+        logger.warn(`never-started listener failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  /**
+   * Lane A (W1): let the owning route bind targeted queue removal after
+   * construction, mirroring `admission.setQuarantineSource`. The route knows the
+   * runtime services; the manager owns the receipt clock. Late binding keeps the
+   * dependency out of `server.ts` and out of a constructor cycle.
+   */
+  setCancelQueuedDelivery(
+    resolver: ((runId: string, sessionId: string, runtime: SessionRuntime) => Promise<'removed' | 'dispatched' | 'unknown'>) | undefined,
+  ): void {
+    this.cancelQueuedDeliveryResolver = resolver;
+  }
+
   private pendingWorkDefersStall(active: ActiveRun): boolean {
     if (!this.hasKnownPendingWork) return false;
     try {
@@ -881,6 +1196,7 @@ export class RunReceiptManager {
       elapsedMs(record.acceptedAt, record.terminalAt),
     );
     this.resolveTerminalWaiters(toPublicReceipt(record));
+    this.fireTerminalListeners(record);
     // §11 fence: cancellation/stall leaves runtime cessation unconfirmed, so the
     // admission slot is held (not reusable) until the runtime confirms quiescent
     // or the drain timeout elapses (bounded quarantine). Normal completion
@@ -1018,6 +1334,64 @@ export class RunReceiptManager {
       if (entry.sessionId === sessionId) return true;
     }
     return false;
+  }
+
+  /**
+   * Lane A correction (03-parent-correction.md §1) — the mandatory Lane B seam.
+   *
+   * A synchronous, read-only census of ADMISSION LEASES ACTUALLY HELD, so the
+   * turn-count mismatch can be computed as `admission - sum(snapshot)` and the
+   * remainder is a real "unexplained" figure instead of a blind subtraction.
+   *
+   * Ownership is the presence of `ActiveRun.lease` — NOT receipt existence and
+   * NOT status alone. That distinction is the whole point:
+   *
+   *  - a joined/steer receipt observes another request's turn and never attaches
+   *    a lease, and a Pi queued follow-up returns before any permit is taken.
+   *    Both are tracked runs with a receipt but own no permit, so counting them
+   *    would MASK a genuine leak (the reverse band in health-alerts).
+   *  - a terminal run whose cessation is unconfirmed still holds its lease; it
+   *    lives in `draining` until released, and its quarantined subset lives in
+   *    the same map. Quarantine is therefore counted ONCE, as a split of
+   *    draining, never in both.
+   *
+   * The four maps are a DISJOINT partition of the lease-holding population:
+   * `active` excludes queued receipts, `draining` excludes quarantined ones.
+   *
+   * Reads only the already-loaded `activeRuns`/`draining` maps: no disk, no
+   * store read, no lock, no promise. A settlement probe must be readable in one
+   * tick, otherwise Lane B's subtraction compares two different moments.
+   */
+  getLeaseOwnershipSnapshot(): LeaseOwnershipSnapshot {
+    const snapshot: LeaseOwnershipSnapshot = {
+      activeByRuntime: {},
+      queuedByRuntime: {},
+      drainingByRuntime: {},
+      quarantinedByRuntime: {},
+    };
+    const bump = (
+      target: Partial<Record<SessionRuntime, number>>,
+      runtime: SessionRuntime | undefined,
+    ): void => {
+      const key = runtime ?? 'pi';
+      target[key] = (target[key] ?? 0) + 1;
+    };
+
+    for (const [runId, active] of this.activeRuns) {
+      if (!active.lease) continue;
+      // Queue-pending is not executing; it keeps its own category so the
+      // active figure never over-reports work in flight.
+      const receipt = this.store.get(runId);
+      if (receipt?.status === 'queued') bump(snapshot.queuedByRuntime, active.runtime);
+      else bump(snapshot.activeByRuntime, active.runtime);
+    }
+    for (const entry of this.draining.values()) {
+      bump(
+        entry.quarantined ? snapshot.quarantinedByRuntime : snapshot.drainingByRuntime,
+        entry.runtime,
+      );
+    }
+    return snapshot;
   }
 
   /** L1: age in ms of the oldest quarantined entry, or undefined when none. */

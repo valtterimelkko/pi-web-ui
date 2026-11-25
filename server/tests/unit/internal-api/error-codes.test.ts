@@ -122,3 +122,42 @@ describe('provider-error codes (lane C)', () => {
     }
   });
 });
+
+/**
+ * Lane A (W1) — the public NEVER_STARTED hint must not tell callers to retry
+ * work the receipt cannot prove was never delivered.
+ *
+ * Root cause (audit §2B): the vocabulary asserted "The message never ran;
+ * re-dispatch it" for a state that only means "no runtime activity was
+ * observed". Eight Devin wakes matched that state while still sitting in a FIFO
+ * queue, and later executed — so the hint's advice could duplicate real work.
+ * Absence of observed activity is not proof of non-delivery.
+ */
+describe('NEVER_STARTED public vocabulary (lane A)', () => {
+  it('does not assert non-execution or advise an unconditional re-dispatch', () => {
+    const info = ERROR_CODE_INFO[ErrorCode.NEVER_STARTED];
+    expect(info).toBeDefined();
+    const hint = info!.hint ?? '';
+
+    // The audit-disproved claim.
+    expect(hint).not.toMatch(/never ran; re-dispatch/i);
+    expect(hint).not.toMatch(/^the message never ran/i);
+    // Actionable, but honest about what must be checked first.
+    expect(hint).toMatch(/delivery|unconfirmed|held in a .*queue/i);
+    expect(hint).toMatch(/transcript|inspect|check|verify/i);
+    // The direction must not be "just send it again".
+    expect(hint).not.toMatch(/^\s*re-dispatch it\.?\s*$/i);
+  });
+
+  it('keeps the runNeverStarted watcher evidence note (parents depend on it)', () => {
+    const hint = ERROR_CODE_INFO[ErrorCode.NEVER_STARTED]!.hint ?? '';
+    expect(hint).toMatch(/watch|runNeverStarted/i);
+  });
+
+  it('does not overstate the cause: absence of activity is what was observed', () => {
+    const cause = ERROR_CODE_INFO[ErrorCode.NEVER_STARTED]!.cause ?? '';
+    // "The runtime never began the work" is the same unproven inference.
+    expect(cause).not.toMatch(/never began the work/i);
+    expect(cause).toMatch(/no .*activity|observed/i);
+  });
+});

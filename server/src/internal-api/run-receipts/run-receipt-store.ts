@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { RUN_TERMINAL_REASON_ALLOWLIST } from '../types.js';
 import type {
   Phase7PiShadowClassification,
+  RunDeliveryEvidence,
   RunLivenessEvidence,
   RunReceipt,
   RunReceiptStatus,
@@ -154,6 +155,10 @@ export class RunReceiptStore {
       try {
         if (this.classifyRecovery?.(record) === 'drain_timeout') interruptionReason = 'drain_timeout';
       } catch { /* classification is advisory; default to an unplanned restart */ }
+      // Lane A (W1): capture the pre-restart status BEFORE mutating it — the
+      // queued-vs-started distinction is what makes the delivery annotation
+      // honest (a queued receipt provably never reached the runtime).
+      const statusAtRestart = record.status;
       record.status = 'interrupted';
       record.terminalAt = recoveryAt;
       record.errorCode = 'SERVER_RESTART';
@@ -174,6 +179,22 @@ export class RunReceiptStore {
             basis: 'server_restart',
             observedAt: recoveryAt,
           },
+          // Lane A (W1): whether a receipt still `queued` at boot PROVES the
+          // message never started depends on the runtime, and this must not be
+          // generalised (R0 §8).
+          //
+          //  - Devin: `started` is written inside the AWAITED dequeue barrier, so
+          //    nothing reaches the runtime while the durable record still says
+          //    `queued`. Queued-at-boot is write-ahead proof of non-execution.
+          //  - Pi: `markQueued` is written BEFORE `agentSession.followUp(...)` and
+          //    `started` only on observing a `message_start`. A crash in between
+          //    leaves `queued` for a message that may already be executing, so
+          //    the honest state is `unconfirmed` — never "safe to retry".
+          ...(statusAtRestart === 'queued' && record.runtime === 'devin'
+            ? { delivery: { state: 'cancelled_before_dispatch' as const, basis: 'memory_queue_lost_at_restart' as const, observedAt: recoveryAt } }
+            : record.liveness.delivery || statusAtRestart === 'queued'
+              ? { delivery: { state: 'unconfirmed' as const, basis: 'memory_queue_lost_at_restart' as const, observedAt: recoveryAt } }
+              : {}),
         };
       }
       this.recoveryProtected.add(record.runId);
@@ -353,16 +374,30 @@ export class RunReceiptStore {
         && candidate.origin === terminalObservation.origin
         && candidate.reason === terminalObservation.reason);
       if (!duplicate) observations.push(terminalObservation);
-      const preserveTerminalCessation = TERMINAL_STATUSES.has(current.status)
+      const isLate = TERMINAL_STATUSES.has(current.status);
+      const preserveTerminalCessation = isLate
         && (current.liveness.cessation.basis === 'watchdog'
           || current.liveness.cessation.basis === 'server_restart');
+      // Lane A (W1): decision-time evidence must survive a late arrival.
+      //
+      // A terminalised receipt's `lastEligibleActivity` records what had been
+      // OBSERVED AT DECISION TIME — that is the field the "nothing ran inside the
+      // window" claim rests on. Overwriting it with a late `agent_end` destroys
+      // the only proof of the decision (audit §2A: alerts read "never started"
+      // while the same receipt showed activity 99 s later). The late arrival is
+      // recorded in `terminalObservations` with `late: true` instead.
+      const lateDelivery = isLate
+        ? lateTerminalDelivery(current.liveness.delivery, current.errorCode, current.liveness.watchdog?.reason, observation.observedAt)
+        : undefined;
       next.liveness = {
         ...current.liveness,
-        lastEligibleActivity: {
-          eventType: 'agent_end',
-          occurredAt: observation.occurredAt,
-          observedAt: observation.observedAt,
-        },
+        ...(isLate ? {} : {
+          lastEligibleActivity: {
+            eventType: 'agent_end',
+            occurredAt: observation.occurredAt,
+            observedAt: observation.observedAt,
+          },
+        }),
         terminalObservations: observations.slice(-4),
         cessation: preserveTerminalCessation
           ? current.liveness.cessation
@@ -371,6 +406,7 @@ export class RunReceiptStore {
               basis: observation.origin === 'synthetic' ? 'synthetic_terminal_signal' : 'terminal_signal',
               observedAt: observation.observedAt,
             },
+        ...(lateDelivery ? { delivery: lateDelivery } : {}),
       };
     }
     this.validate(next);
@@ -569,6 +605,19 @@ const LIVENESS_KEYS = new Set([
   'watchdog',
   'terminalObservations',
   'cessation',
+  'delivery',
+]);
+const DELIVERY_KEYS = new Set(['state', 'basis', 'observedAt']);
+const DELIVERY_STATES = new Set(['queued', 'dispatched', 'cancelled_before_dispatch', 'unconfirmed', 'late_terminal_observed']);
+const DELIVERY_BASES = new Set([
+  'follow_up_queue',
+  'dequeue',
+  'targeted_removal',
+  'follow_up_race',
+  'queue_state_unknown',
+  'memory_queue_lost_at_restart',
+  'late_terminal',
+  'dispatch_barrier_expired',
 ]);
 const ACTIVITY_KEYS = new Set(['eventType', 'occurredAt', 'observedAt']);
 const WATCHDOG_KEYS = new Set(['reason', 'decidedAt', 'idleTimeoutMs', 'absoluteTimeoutMs', 'startWindowMs']);
@@ -758,6 +807,45 @@ function validateLiveness(value: RunLivenessEvidence): void {
   if (!['confirmed', 'unconfirmed', 'unknown'].includes(value.cessation.state)) throw new Error('Invalid cessation state');
   if (!['terminal_signal', 'synthetic_terminal_signal', 'documented_handler_return', 'resource_quiescence', 'watchdog', 'server_restart', 'no_terminal_signal'].includes(value.cessation.basis)) throw new Error('Invalid cessation basis');
   assertIsoTimestamp(value.cessation.observedAt, 'cessation observedAt');
+  if (value.delivery !== undefined) validateDeliveryEvidence(value.delivery);
+}
+
+/**
+ * Lane A (W1): bounded validation for the queue-delivery evidence. Enumerated
+ * sets rather than free text keep a future receipt from smuggling arbitrary
+ * strings into the durable store.
+ */
+function validateDeliveryEvidence(value: RunDeliveryEvidence): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid delivery evidence');
+  assertOnlyKeys(value, DELIVERY_KEYS, 'delivery');
+  if (!DELIVERY_STATES.has(value.state)) throw new Error('Invalid delivery state');
+  if (!DELIVERY_BASES.has(value.basis)) throw new Error('Invalid delivery basis');
+  assertIsoTimestamp(value.observedAt, 'delivery observedAt');
+}
+
+/**
+ * Lane A (W1): a terminal event that arrives after the run was decided must not
+ * be re-labelled as delivery proof — that is semantically backwards. When the
+ * receipt's DECISION asserted non-execution (NEVER_STARTED, or a watchdog
+ * `no_activity` verdict) and a terminal observation then arrives, the honest
+ * record is "late terminal observed": both facts stay visible and the notice
+ * names the contradiction instead of advising a retry.
+ *
+ * A receipt whose decision already accepted that a turn was executing (idle or
+ * absolute stall) needs no rewrite: the late observation is ordinary completion
+ * evidence, and re-labelling it would fabricate a contradiction.
+ */
+function lateTerminalDelivery(
+  delivery: RunDeliveryEvidence | undefined,
+  errorCode: string | undefined,
+  watchdogReason: string | undefined,
+  observedAt: string,
+): RunDeliveryEvidence | undefined {
+  const decisionAssertedNonExecution = errorCode === 'NEVER_STARTED' || watchdogReason === 'no_activity';
+  const assertedByDelivery = delivery !== undefined
+    && (delivery.state === 'queued' || delivery.state === 'cancelled_before_dispatch' || delivery.state === 'unconfirmed');
+  if (!decisionAssertedNonExecution && !assertedByDelivery) return undefined;
+  return { state: 'late_terminal_observed', basis: 'late_terminal', observedAt };
 }
 
 function cloneReceipt(record: PersistedRunReceipt): PersistedRunReceipt {
