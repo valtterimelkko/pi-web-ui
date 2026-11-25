@@ -1,4 +1,5 @@
 import type { HealthReadings } from './health-readings.js';
+import { categoryTotal, knownLeaseTotal, type PermitOwnershipClassified } from './permit-ownership.js';
 
 /**
  * A2 alerts: heap and event-loop health with hysteresis, so a reading that
@@ -262,21 +263,44 @@ export class ConsecutiveReadingsLatch {
     return undefined;
   }
 
+  /**
+   * Correction 04: an unknown reading (a wired ownership source failed) is not
+   * evidence in either direction. It keeps the armed state untouched but
+   * restarts both runs, so an equal -> unknown -> equal sequence cannot recover
+   * on one reliable reading, and one unknown cannot count towards an arm run.
+   */
+  invalidate(): void {
+    this.leakRun = 0;
+    this.equalRun = 0;
+  }
+
   describe(): { alerting: boolean; alertReadings: number; recoveryReadings: number; name: string } {
     return { alerting: this.armedState, alertReadings: this.alertReadings, recoveryReadings: this.recoveryReadings, name: this.name };
   }
 }
 
 /**
- * J3: the signed admission-vs-telemetry delta in three states (correction 02):
- * `> 0` — leak (admission holds more active turns than the runtime telemetry;
- * the value is the worst positive excess across the total and any per-runtime
- * mismatch), `=== 0` — equal, `< 0` — reverse (telemetry above admission
- * somewhere and no leak anywhere; e.g. receipts joined to another turn's
- * permit — legitimate, never alerting). `undefined` when admission is unwired
- * (the fields are absent), so an unwired sampler never evaluates this alert.
+ * J3/R0: the signed admission-vs-ownership delta in three states
+ * `> 0` — unexplained: admission holds more permits than the run manager's
+ * attached leases on a runtime (a permit with no owning receipt lease, or held
+ * debt the manager does not know about), `=== 0` — equal, `< 0` — reverse
+ * (attached leases above admission somewhere and no unexplained permit
+ * anywhere — legitimate, never alerting).
+ *
+ * With a classified ownership reading the counts come from the same tick and
+ * the `unexplained` remainder is already per-runtime (no runtimes cancel each
+ * other). A wired-but-failed source is `unknown`: the delta is `undefined` so
+ * the latch neither alerts nor recovers on missing data. With no ownership
+ * source the legacy receipt-counter delta is used and stays explicitly
+ * unclassified.
  */
 export function turnCountMismatchDelta(readings: HealthReadings): number | undefined {
+  const ownership = readings.permitOwnership;
+  if (ownership) {
+    if (ownership.state !== 'classified') return undefined;
+    if (ownership.unexplained > 0) return ownership.unexplained;
+    return ownership.reverse > 0 ? -ownership.reverse : 0;
+  }
   const admission = readings.admissionActiveTurns;
   if (admission === undefined || !Number.isFinite(admission)) return undefined;
   const telemetry = readings.activeTurnsByClass ?? {};
@@ -290,6 +314,48 @@ export function turnCountMismatchDelta(readings: HealthReadings): number | undef
   if (worstLeak > 0) return worstLeak;
   const worstReverse = Math.min(...diffs);
   return worstReverse < 0 ? worstReverse : 0;
+}
+
+/** Correction 04: a wired ownership source could not classify this reading. */
+function isUnknownPermitOwnership(readings: HealthReadings): boolean {
+  return readings.permitOwnership?.state === 'unknown';
+}
+
+function formatByRuntime(counts: Record<string, number>): string {
+  const entries = Object.entries(counts).filter(([, value]) => value > 0).map(([runtime, value]) => `${runtime}: ${value}`);
+  return entries.length > 0 ? entries.join(', ') : 'none';
+}
+
+function ownershipTotals(ownership: PermitOwnershipClassified): string {
+  return `known attached leases: active ${categoryTotal(ownership, 'active')}, queued ${categoryTotal(ownership, 'queued')}, draining ${categoryTotal(ownership, 'draining')}, quarantined ${categoryTotal(ownership, 'quarantined')}`;
+}
+
+/**
+ * R0 alert evidence. Classified wording never calls the remainder a leak and
+ * never borrows a receipt-counter inference; held terminal leases are named as
+ * known debt, and the joined-turn blind spot of the legacy counters is stated.
+ */
+function ownershipAlertEvidence(readings: HealthReadings, excess: number, alertReadings: number): string | undefined {
+  const ownership = readings.permitOwnership;
+  if (ownership?.state === 'classified') {
+    const permits = Object.values(ownership.admissionByRuntime).reduce((sum, value) => sum + value, 0);
+    return `turn-count mismatch: ${excess} admission permit(s) with no attached receipt lease for ${alertReadings} consecutive readings (unexplained by runtime ${formatByRuntime(ownership.unexplainedByRuntime)}); ${ownershipTotals(ownership)}; admission ${permits} permit(s) vs ${knownLeaseTotal(ownership)} attached lease(s). Known held terminal leases are counted as debt, not as a leak, and a joined turn without a permit cannot mask one`;
+  }
+  if (ownership) {
+    return `turn-count mismatch: permit ownership classification unavailable (${ownership.reason}) — cause unknown, and known held debt cannot be excluded`;
+  }
+  return undefined;
+}
+
+function ownershipAgreementFact(ownership: PermitOwnershipClassified, recoveryReadings: number): string {
+  const permits = Object.values(ownership.admissionByRuntime).reduce((sum, value) => sum + value, 0);
+  return `admission ${permits} permit(s) and ${knownLeaseTotal(ownership)} attached receipt lease(s) agree (unexplained 0 for ${recoveryReadings} consecutive readings)`;
+}
+
+function ownershipRecoveryEvidence(readings: HealthReadings, recoveryReadings: number): string | undefined {
+  const ownership = readings.permitOwnership;
+  if (ownership?.state !== 'classified') return undefined;
+  return `turn-count mismatch cleared: ${ownershipAgreementFact(ownership, recoveryReadings)}`;
 }
 
 export interface HealthIncidentGrouperOptions {
@@ -390,8 +456,13 @@ export class HealthIncidentGrouper {
     // Nth consecutive leak reading and a single boundary-race reading never
     // opens one after a close.
     const mismatchDelta = turnCountMismatchDelta(readings);
-    if (mismatchDelta !== undefined) {
-      const grouperValue = mismatchDelta > 0 ? mismatchDelta : mismatchDelta === 0 ? 0 : J3_MISMATCH_REVERSE_BAND;
+    const mismatchUnknown = isUnknownPermitOwnership(readings);
+    if (mismatchDelta !== undefined || mismatchUnknown) {
+      // Unknown evidence maps to the dead band: the incident stays open, the
+      // quiet clock restarts, and a pending arm run is broken (correction 04).
+      const grouperValue = mismatchDelta === undefined
+        ? J3_MISMATCH_REVERSE_BAND
+        : mismatchDelta > 0 ? mismatchDelta : mismatchDelta === 0 ? 0 : J3_MISMATCH_REVERSE_BAND;
       const mismatch = this.observeKind('turn_count_mismatch', this.mismatch, grouperValue, 1, 0, 0, atMs, rawAlert('turn_count_mismatch'), this.debounceFor('turn_count_mismatch'), readings);
       if (mismatch) notifications.push(mismatch);
     }
@@ -420,7 +491,7 @@ export class HealthIncidentGrouper {
       if (value <= low) {
         if (state.quietSinceMs === undefined) state.quietSinceMs = atMs;
         if (atMs - state.quietSinceMs < this.config.quietPeriodMs) return undefined;
-        return this.closeIncident(kind, state, value, low, heapLimitBytes, atMs);
+        return this.closeIncident(kind, state, value, low, heapLimitBytes, atMs, readings);
       }
       // Dead band: the metric has not recovered, so the quiet clock restarts.
       state.quietSinceMs = undefined;
@@ -505,6 +576,7 @@ export class HealthIncidentGrouper {
     low: number,
     heapLimitBytes: number,
     atMs: number,
+    readings?: HealthReadings,
   ): HealthAlert {
     const startedAtMs = state.startedAtMs ?? atMs;
     const endedAt = new Date(atMs).toISOString();
@@ -517,7 +589,7 @@ export class HealthIncidentGrouper {
       alertCrossings: state.crossings,
       reopenedDuringCooldown: state.reopenedDuringCooldown,
     };
-    const message = this.recoveryMessage(kind, incident, heapLimitBytes);
+    const message = this.recoveryMessage(kind, incident, heapLimitBytes, readings);
     state.open = false;
     state.lastClosedAtMs = atMs;
     state.startedAtMs = undefined;
@@ -542,23 +614,26 @@ export class HealthIncidentGrouper {
       return `heap pressure incident: ${(value * 100).toFixed(1)}% of the ${Math.round(heapLimitBytes / 1_048_576)} MB V8 heap limit (alert above ${(high * 100).toFixed(1)}%); ${tail}`;
     }
     if (kind === 'turn_count_mismatch') {
+      const classified = readings ? ownershipAlertEvidence(readings, value, this.thresholds.turnCountMismatchAlertReadings ?? DEFAULT_TURN_MISMATCH_ALERT_READINGS) : undefined;
+      if (classified) return `${classified}; ${tail}`;
       const classes = Object.entries(readings?.admissionTurnsByClass ?? {}).filter(([, n]) => n > 0).map(([c, n]) => `${c}: ${n}`).join(', ') || 'none';
       const perRuntime = Object.entries(readings?.admissionTurnsByRuntime ?? {})
         .map(([runtime, n]) => `${runtime} admission ${n} vs telemetry ${readings?.activeTurnsByClass?.[runtime] ?? 0}`)
         .join(', ') || 'per-runtime counts unavailable';
       const oldest = readings?.admissionOldestActiveRunStartedAt
         ? `; oldest receipt-derived run started ${readings.admissionOldestActiveRunStartedAt}`
-        : '; no receipt-derived active run (a leaked permit holds no receipt)';
-      return `turn-count mismatch incident: admission holds ${readings?.admissionActiveTurns ?? '?'} active turn(s) (classes ${classes}) against telemetry excess ${value} sustained (${perRuntime})${oldest}; ${tail}`;
+        : '';
+      return `turn-count mismatch incident (unclassified): admission holds ${readings?.admissionActiveTurns ?? '?'} active turn(s) (classes ${classes}) against telemetry excess ${value} sustained (${perRuntime})${oldest}; no lease-ownership source is wired, so held terminal leases cannot be excluded from this excess; ${tail}`;
     }
     return `event-loop lag incident: p99 ${Math.round(value)} ms (alert above ${high} ms); ${tail}`;
   }
 
-  private recoveryMessage(kind: HealthAlertKind, incident: HealthIncidentSummary, heapLimitBytes: number): string {
+  private recoveryMessage(kind: HealthAlertKind, incident: HealthIncidentSummary, heapLimitBytes: number, readings?: HealthReadings): string {
+    const ownership = readings?.permitOwnership?.state === 'classified' ? readings.permitOwnership : undefined;
     const peak = kind === 'heap_pressure'
       ? `peak ${(incident.peakValue * 100).toFixed(1)}% of the ${Math.round(heapLimitBytes / 1_048_576)} MB V8 heap limit`
       : kind === 'turn_count_mismatch'
-        ? `peak admission-vs-telemetry excess ${incident.peakValue} active turn(s)`
+        ? (ownership ? `peak ${incident.peakValue} unexplained permit(s)` : `peak admission-vs-telemetry excess ${incident.peakValue} active turn(s)`)
         : `peak p99 ${Math.round(incident.peakValue)} ms`;
     const crossings = incident.alertCrossings === 1
       ? '1 alert crossing folded'
@@ -566,8 +641,11 @@ export class HealthIncidentGrouper {
     const reopened = incident.reopenedDuringCooldown
       ? '; reopened during the cooldown without a new alert'
       : '';
+    const agreement = kind === 'turn_count_mismatch' && ownership
+      ? `; ${ownershipAgreementFact(ownership, this.thresholds.turnCountMismatchRecoveryReadings ?? DEFAULT_TURN_MISMATCH_RECOVERY_READINGS)}`
+      : '';
     const subject = kind === 'heap_pressure' ? 'heap pressure' : kind === 'turn_count_mismatch' ? 'turn-count mismatch' : 'event-loop lag';
-    return `${subject} incident recovered: ${peak}, ${incident.startedAt} → ${incident.endedAt} (${formatIncidentDuration(incident.durationMs ?? 0)}), ${crossings}${reopened}`;
+    return `${subject} incident recovered: ${peak}, ${incident.startedAt} → ${incident.endedAt} (${formatIncidentDuration(incident.durationMs ?? 0)}), ${crossings}${reopened}${agreement}`;
   }
 }
 
@@ -665,23 +743,30 @@ export class HealthAlertEvaluator {
             : this.mismatchRecoveryMessage(readings),
         });
       }
+    } else if (isUnknownPermitOwnership(readings)) {
+      // Correction 04: no alert and no recovery, but the evidence runs restart.
+      this.mismatchLatch.invalidate();
     }
 
     return alerts;
   }
 
   private mismatchAlertMessage(readings: HealthReadings, excess: number): string {
+    const classified = ownershipAlertEvidence(readings, excess, this.turnAlertReadings);
+    if (classified) return classified;
     const classes = Object.entries(readings.admissionTurnsByClass ?? {}).filter(([, n]) => n > 0).map(([c, n]) => `${c}: ${n}`).join(', ') || 'none';
     const perRuntime = Object.entries(readings.admissionTurnsByRuntime ?? {})
       .map(([runtime, n]) => `${runtime} admission ${n} vs telemetry ${readings.activeTurnsByClass?.[runtime] ?? 0}`)
       .join(', ') || 'per-runtime counts unavailable';
     const oldest = readings.admissionOldestActiveRunStartedAt
       ? `; oldest receipt-derived run started ${readings.admissionOldestActiveRunStartedAt}`
-      : '; no receipt-derived active run (a leaked permit holds no receipt)';
-    return `turn-count mismatch: admission holds ${readings.admissionActiveTurns} active turn(s) (classes ${classes}) against telemetry excess ${excess} for ${this.turnAlertReadings} consecutive readings (${perRuntime})${oldest}`;
+      : '';
+    return `turn-count mismatch (unclassified): admission holds ${readings.admissionActiveTurns} active turn(s) (classes ${classes}) against telemetry excess ${excess} for ${this.turnAlertReadings} consecutive readings (${perRuntime})${oldest}; no lease-ownership source is wired, so held terminal leases cannot be excluded from this excess`;
   }
 
   private mismatchRecoveryMessage(readings: HealthReadings): string {
+    const classified = ownershipRecoveryEvidence(readings, this.turnRecoveryReadings);
+    if (classified) return classified;
     return `turn-count mismatch cleared: admission ${readings.admissionActiveTurns} active turn(s), telemetry ${Object.values(readings.activeTurnsByClass ?? {}).reduce((sum, value) => sum + value, 0)} (agreement held for ${this.turnRecoveryReadings} consecutive readings)`;
   }
 

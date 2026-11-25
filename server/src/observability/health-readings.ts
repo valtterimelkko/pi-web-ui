@@ -2,6 +2,12 @@ import { readFileSync } from 'node:fs';
 import { getHeapStatistics } from 'node:v8';
 import { readEventLoopLagWindow, type EventLoopLagWindow } from '../internal-api/event-loop-shed.js';
 import { getOperationalMetrics, type OperationalMetrics } from './operational-metrics.js';
+import {
+  classifyPermitOwnership,
+  unknownPermitOwnership,
+  type LeaseOwnershipSnapshot,
+  type PermitOwnership,
+} from './permit-ownership.js';
 import type { StreamingWindowSummary } from './streaming-telemetry.js';
 
 /**
@@ -84,6 +90,14 @@ export interface HealthReadings {
    * which holds no receipt). Absent when unwired or unexposed.
    */
   admissionOldestActiveRunStartedAt?: string;
+  /**
+   * R0: classified permit ownership for the turn-count detector, computed in
+   * the same tick as `admissionActiveTurns`. Absent when no ownership source is
+   * wired (the detector then stays explicitly unclassified) — present as
+   * `state: 'unknown'` when a wired source fails, which must neither alert nor
+   * recover an existing incident.
+   */
+  permitOwnership?: PermitOwnership;
 }
 
 export type MainThreadCpuSource = 'proc-thread-self' | 'process-cpu' | 'unavailable';
@@ -268,6 +282,13 @@ export interface HealthReadingSources {
    * missing, throwing or malformed source simply omits the fields.
    */
   admissionCounts?: () => AdmissionCountsReading | undefined;
+  /**
+   * R0: the run manager's attached-lease counts per runtime (`getLeaseOwnershipSnapshot()`),
+   * read synchronously in the same tick as `admissionCounts`. Fail-open: a
+   * throwing or malformed source yields an `unknown` ownership reading, never a
+   * zero mismatch. Absent = feature not wired (legacy unclassified detector).
+   */
+  permitOwnership?: () => LeaseOwnershipSnapshot | undefined;
   residentSessions?: () => number | undefined;
   /** Registry entry count; the session registry loads lazily, so this may be async. */
   registryEntries?: () => number | undefined | Promise<number | undefined>;
@@ -368,6 +389,37 @@ function readAdmissionCounts(read: (() => AdmissionCountsReading | undefined) | 
 }
 
 /**
+ * R0: one same-tick ownership classification. Absent source = feature not
+ * wired (the detector keeps its legacy raw, explicitly unclassified path).
+ * Wired but failing (throws, returns nothing, or malformed) = `unknown`, so the
+ * detector can neither name a cause nor recover on missing data.
+ *
+ * Correction 03: a wired ownership source also requires a complete admission
+ * per-runtime view. An empty or partial `runtimes` map (its sum must equal
+ * `activeTurns`) would make every permit invisible and classify as `0` — which
+ * reads as agreement and could recover an armed incident on incomplete data.
+ * That is `unknown` too, never the legacy fallback.
+ */
+function readPermitOwnership(
+  read: (() => LeaseOwnershipSnapshot | undefined) | undefined,
+  admissionCounts: ValidatedAdmissionCounts | undefined,
+): PermitOwnership | undefined {
+  if (!read) return undefined;
+  let snapshot: LeaseOwnershipSnapshot | undefined;
+  try {
+    snapshot = read();
+  } catch {
+    return unknownPermitOwnership('source-failed');
+  }
+  if (snapshot === undefined || snapshot === null) return unknownPermitOwnership('source-failed');
+  const runtimes = admissionCounts?.runtimes;
+  if (!runtimes) return unknownPermitOwnership('invalid-admission-counts');
+  const runtimeTotal = Object.values(runtimes).reduce((sum, count) => sum + count, 0);
+  if (runtimeTotal !== admissionCounts.activeTurns) return unknownPermitOwnership('invalid-admission-counts');
+  return classifyPermitOwnership(snapshot, runtimes);
+}
+
+/**
  * Collect one reading from the provided sources (defaults = the real process:
  * `process.memoryUsage()`, the V8 heap limit, the shared lag window and the
  * global operational metrics).
@@ -386,6 +438,7 @@ export function collectHealthReadings(sources: HealthReadingSources = {}): Healt
   const lagWindow = safe(sources.lagWindow, readEventLoopLagWindow());
   const admission = safe<AdmissionReading | undefined>(sources.admission, undefined);
   const admissionCounts = readAdmissionCounts(sources.admissionCounts);
+  const permitOwnership = readPermitOwnership(sources.permitOwnership, admissionCounts);
   const cpu = safe<HealthCpuReading | undefined>(sources.cpuReading ? () => sources.cpuReading?.(now) : undefined, undefined);
 
   const classes = admission
@@ -448,6 +501,7 @@ export function collectHealthReadings(sources: HealthReadingSources = {}): Healt
       ...(admissionCounts.runtimes ? { admissionTurnsByRuntime: admissionCounts.runtimes } : {}),
       ...(admissionCounts.oldestActiveRunStartedAt ? { admissionOldestActiveRunStartedAt: admissionCounts.oldestActiveRunStartedAt } : {}),
     } : {}),
+    ...(permitOwnership ? { permitOwnership } : {}),
   };
 }
 
