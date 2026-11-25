@@ -263,6 +263,17 @@ export class ConsecutiveReadingsLatch {
     return undefined;
   }
 
+  /**
+   * Correction 04: an unknown reading (a wired ownership source failed) is not
+   * evidence in either direction. It keeps the armed state untouched but
+   * restarts both runs, so an equal -> unknown -> equal sequence cannot recover
+   * on one reliable reading, and one unknown cannot count towards an arm run.
+   */
+  invalidate(): void {
+    this.leakRun = 0;
+    this.equalRun = 0;
+  }
+
   describe(): { alerting: boolean; alertReadings: number; recoveryReadings: number; name: string } {
     return { alerting: this.armedState, alertReadings: this.alertReadings, recoveryReadings: this.recoveryReadings, name: this.name };
   }
@@ -303,6 +314,11 @@ export function turnCountMismatchDelta(readings: HealthReadings): number | undef
   if (worstLeak > 0) return worstLeak;
   const worstReverse = Math.min(...diffs);
   return worstReverse < 0 ? worstReverse : 0;
+}
+
+/** Correction 04: a wired ownership source could not classify this reading. */
+function isUnknownPermitOwnership(readings: HealthReadings): boolean {
+  return readings.permitOwnership?.state === 'unknown';
 }
 
 function formatByRuntime(counts: Record<string, number>): string {
@@ -440,8 +456,13 @@ export class HealthIncidentGrouper {
     // Nth consecutive leak reading and a single boundary-race reading never
     // opens one after a close.
     const mismatchDelta = turnCountMismatchDelta(readings);
-    if (mismatchDelta !== undefined) {
-      const grouperValue = mismatchDelta > 0 ? mismatchDelta : mismatchDelta === 0 ? 0 : J3_MISMATCH_REVERSE_BAND;
+    const mismatchUnknown = isUnknownPermitOwnership(readings);
+    if (mismatchDelta !== undefined || mismatchUnknown) {
+      // Unknown evidence maps to the dead band: the incident stays open, the
+      // quiet clock restarts, and a pending arm run is broken (correction 04).
+      const grouperValue = mismatchDelta === undefined
+        ? J3_MISMATCH_REVERSE_BAND
+        : mismatchDelta > 0 ? mismatchDelta : mismatchDelta === 0 ? 0 : J3_MISMATCH_REVERSE_BAND;
       const mismatch = this.observeKind('turn_count_mismatch', this.mismatch, grouperValue, 1, 0, 0, atMs, rawAlert('turn_count_mismatch'), this.debounceFor('turn_count_mismatch'), readings);
       if (mismatch) notifications.push(mismatch);
     }
@@ -722,6 +743,9 @@ export class HealthAlertEvaluator {
             : this.mismatchRecoveryMessage(readings),
         });
       }
+    } else if (isUnknownPermitOwnership(readings)) {
+      // Correction 04: no alert and no recovery, but the evidence runs restart.
+      this.mismatchLatch.invalidate();
     }
 
     return alerts;

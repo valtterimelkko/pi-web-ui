@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   HealthAlertEvaluator,
+  HealthIncidentGrouper,
   turnCountMismatchDelta,
   type HealthAlertThresholds,
 } from '../../../src/observability/health-alerts.js';
@@ -345,5 +346,87 @@ describe('inconsistent admission per-runtime counts (correction 03)', () => {
     const validAgree = (atMs: number) => reading({ atMs, counts: { activeTurns: 1, classes: { P2: { active: 1 } }, runtimes: { pi: { activeTurns: 1 } } }, ownership: snapshot({ activeByRuntime: { pi: 1 } }) });
     expect(value.evaluate(validAgree(181_000))).toEqual([]);
     expect(value.evaluate(validAgree(211_000))).toHaveLength(1);
+  });
+});
+
+/**
+ * Correction 04 (R1 review, parent-reproduced): an unknown ownership reading
+ * froze the latch but did not break its runs, so an equal -> unknown -> equal
+ * sequence could still recover an armed incident on one reliable reading, and
+ * a long unknown gap counted as quiet time in the grouper. Unknown evidence
+ * must keep the incident open while restarting the alert and recovery runs and
+ * the grouper's quiet clock.
+ */
+describe('unknown ownership breaks evidence runs (correction 04)', () => {
+  const countsFor = (n: number): AdmissionCountsReading => ({
+    activeTurns: n,
+    classes: { P2: { active: n } },
+    runtimes: { pi: { activeTurns: n } },
+  });
+  const leak = (atMs: number) => reading({ atMs, counts: countsFor(1), ownership: snapshot() });
+  const equal = (atMs: number) => reading({ atMs, counts: countsFor(1), ownership: snapshot({ activeByRuntime: { pi: 1 } }) });
+  const unknown = (atMs: number) => reading({ atMs, counts: countsFor(1), ownership: 'throw' });
+
+  it('equal -> unknown -> equal cannot recover without two consecutive reliable equal readings', () => {
+    const value = evaluator();
+    value.evaluate(leak(1_000));
+    value.evaluate(leak(31_000));
+    expect(value.evaluate(leak(61_000))).toHaveLength(1);
+    expect(value.evaluate(equal(91_000))).toEqual([]); // first reliable equal reading
+    expect(value.evaluate(unknown(121_000))).toEqual([]); // gap: no recovery, run reset
+    expect(value.evaluate(equal(151_000))).toEqual([]); // parent probe: previously recovered here
+    expect(value.snapshot().turnCountMismatch.alerting).toBe(true);
+    const recovery = value.evaluate(equal(181_000));
+    expect(recovery).toHaveLength(1);
+    expect(recovery[0]).toMatchObject({ kind: 'turn_count_mismatch', transition: 'recovery' });
+  });
+
+  it('leak -> unknown -> leak needs a fresh full alert run', () => {
+    const value = evaluator();
+    value.evaluate(leak(1_000));
+    value.evaluate(leak(31_000));
+    expect(value.evaluate(unknown(61_000))).toEqual([]);
+    // Two consecutive leak readings after the gap are not enough.
+    expect(value.evaluate(leak(91_000))).toEqual([]);
+    expect(value.evaluate(leak(121_000))).toEqual([]);
+    expect(value.snapshot().turnCountMismatch.alerting).toBe(false);
+    expect(value.evaluate(leak(151_000))).toHaveLength(1);
+  });
+
+  it('the grouper restarts its quiet clock at an unknown gap instead of counting it as quiet time', () => {
+    const grouper = new HealthIncidentGrouper({
+      thresholds: THRESHOLDS,
+      config: { quietPeriodMs: 1_000, cooldownMs: 0, debounceReadings: 3 },
+    });
+    const value = evaluator();
+    const drive = (r: HealthReadings) => grouper.observe(r, value.evaluate(r));
+    expect(drive(leak(1_000))).toEqual([]);
+    expect(drive(leak(31_000))).toEqual([]);
+    expect(drive(leak(61_000))).toHaveLength(1); // incident opens
+    expect(drive(equal(91_000))).toEqual([]); // quiet clock starts
+    expect(drive(unknown(121_000))).toEqual([]); // unknown: clock restarts, incident stays open
+    expect(drive(equal(151_000))).toEqual([]); // quiet clock restarts here, not at 91 s
+    expect(drive(equal(152_100))).toHaveLength(1); // 1.1 s of reliable quiet closes exactly once
+  });
+
+  it('treats malformed admission inputs as unknown, never as agreement', () => {
+    const malformed: Array<{ label: string; counts: AdmissionCountsReading | null }> = [
+      { label: 'NaN runtime count', counts: { activeTurns: 1, classes: {}, runtimes: { pi: { activeTurns: Number.NaN } } as NonNullable<AdmissionCountsReading['runtimes']> } },
+      { label: 'null runtime map', counts: { activeTurns: 1, classes: {}, runtimes: null as unknown as NonNullable<AdmissionCountsReading['runtimes']> } },
+      { label: 'negative runtime count', counts: { activeTurns: 2, classes: {}, runtimes: { pi: { activeTurns: 1 }, claude: { activeTurns: -1 } } as NonNullable<AdmissionCountsReading['runtimes']> } },
+      { label: 'over-summing map', counts: { activeTurns: 1, classes: {}, runtimes: { pi: { activeTurns: 1 }, claude: { activeTurns: 1 } } as NonNullable<AdmissionCountsReading['runtimes']> } },
+      { label: 'non-finite count', counts: { activeTurns: 1, classes: {}, runtimes: { pi: { activeTurns: Number.POSITIVE_INFINITY } } as NonNullable<AdmissionCountsReading['runtimes']> } },
+      { label: 'fractional counts', counts: { activeTurns: 1, classes: {}, runtimes: { pi: { activeTurns: 0.5 }, claude: { activeTurns: 0.5 } } as NonNullable<AdmissionCountsReading['runtimes']> } },
+      { label: 'absent counts source', counts: null },
+    ];
+    for (const entry of malformed) {
+      const readings = collectHealthReadings({
+        now: () => 1_000,
+        ...(entry.counts ? { admissionCounts: () => entry.counts as AdmissionCountsReading } : {}),
+        permitOwnership: () => snapshot(),
+      });
+      expect(readings.permitOwnership, entry.label).toMatchObject({ state: 'unknown', reason: 'invalid-admission-counts' });
+      expect(turnCountMismatchDelta(readings), entry.label).toBeUndefined();
+    }
   });
 });
