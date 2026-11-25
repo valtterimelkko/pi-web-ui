@@ -95,9 +95,21 @@ interface QueuedTurn {
   onDispatched?: () => Promise<void> | void;
 }
 
-/** Lane A: typed, item-scoped cancellation (never a generic runtime error). */
+/**
+ * Lane A: typed, item-scoped cancellation (never a generic runtime error).
+ *
+ * Correction 06 §2 (parent answer 06-q2): `source` says WHO removed the item,
+ * because that decides who records the outcome. A targeted removal has a caller
+ * that writes the proven-removal receipt straight afterwards, so the route must
+ * not write first. An abort or dispose has no other owner, so the route must
+ * still write an honest terminal receipt itself.
+ */
 export class DevinQueuedItemCancelled extends Error {
-  constructor(public readonly itemId: string, reason = 'removed before dispatch') {
+  constructor(
+    public readonly itemId: string,
+    reason = 'removed before dispatch',
+    public readonly source: 'targeted_removal' | 'session_abort' | 'session_disposed' = 'targeted_removal',
+  ) {
     super(`Devin queued follow-up ${itemId} was cancelled: ${reason}`);
     this.name = 'DevinQueuedItemCancelled';
   }
@@ -748,7 +760,7 @@ export class DevinService {
     // runtime error. A targeted single-item removal is `cancelQueuedItem`.
     const queued = this.turnQueues.get(sessionId);
     if (queued) {
-      for (const item of queued) item.onComplete(new DevinQueuedItemCancelled(item.itemId, 'session aborted'));
+      for (const item of queued) item.onComplete(new DevinQueuedItemCancelled(item.itemId, 'session aborted', 'session_abort'));
       this.turnQueues.delete(sessionId);
     }
   }
@@ -757,7 +769,7 @@ export class DevinService {
     this.shutdownProcess(sessionId);
     const queued = this.turnQueues.get(sessionId);
     if (queued) {
-      for (const item of queued) item.onComplete(new DevinQueuedItemCancelled(item.itemId, 'session disposed'));
+      for (const item of queued) item.onComplete(new DevinQueuedItemCancelled(item.itemId, 'session disposed', 'session_disposed'));
       this.turnQueues.delete(sessionId);
     }
     this.sessionMeta.delete(sessionId);
