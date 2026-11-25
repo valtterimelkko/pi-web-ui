@@ -13,6 +13,7 @@ import { createLogger } from '../logging/logger.js';
 import { parseDevinModelsJson, toDevinCatalogEntries, resolveDevinLevelSwap, type DevinModelEntry } from './devin-models.js';
 import { DevinAcpClient } from './devin-acp-client.js';
 import { AcpEventAdapter } from './devin-event-adapter.js';
+import { classifyDevinError, type DevinErrorClassification } from './devin-error-class.js';
 import { devinSpawnEnv } from './devin-spawn-env.js';
 
 const logger = createLogger('DevinService');
@@ -55,6 +56,25 @@ export function runDevin(args: string[], timeoutMs: number, devinHome?: string, 
       }
     });
   });
+}
+
+/**
+ * A failed Devin turn whose provider error class means something to the caller:
+ * the free-model allowance is exhausted (stop until it resets). Forwarded as the
+ * turn's completion error so the run receipt names the class
+ * (`PROVIDER_QUOTA_EXHAUSTED`) instead of the generic `RUNTIME_ERROR`; an
+ * unclassified failure stays a plain `Error`, which keeps the pre-existing
+ * three-strike goal policy. Mirrors the shipped Antigravity shape.
+ */
+export class DevinProviderTurnError extends Error {
+  constructor(
+    message: string,
+    readonly errorClass: 'quota' | 'transient',
+    readonly resetAt?: string,
+  ) {
+    super(message);
+    this.name = 'DevinProviderTurnError';
+  }
 }
 
 interface ActiveSessionMeta {
@@ -639,6 +659,15 @@ export class DevinService {
 
       const isCancelled = result.cancelled;
       const failed = !isCancelled && (result.stopReason === 'error' || result.error !== undefined);
+      // Lane C (quota): classify the FAILED TURN's own error text — never
+      // `adapter.turnText`, which is assistant prose and can quote anything. The
+      // recorded Devin refusal arrives here as the JSON-RPC error message of
+      // `session/prompt`, so `result.error` is the provider's own envelope. One
+      // classification, used by both the broker annotation and the completion
+      // error; no retry, no reroute, no scheduling.
+      const providerError: DevinErrorClassification | undefined = failed
+        ? classifyDevinError(result.error)
+        : undefined;
       const response = adapter.turnText || (isCancelled ? '' : (failed ? `The Devin turn failed (${result.error ?? result.stopReason ?? 'error'}).` : ''));
 
       // Close the streamed assistant message, then ALWAYS agent_end (also on
@@ -648,6 +677,8 @@ export class DevinService {
         ...(result.stopReason !== undefined ? { stopReason: result.stopReason } : {}),
         cancelled: isCancelled,
         ...(failed ? { error: result.error ?? result.stopReason ?? 'error' } : {}),
+        ...(providerError ? { errorClass: providerError.kind } : {}),
+        ...(providerError?.resetAt ? { resetAt: providerError.resetAt } : {}),
       }, Date.now());
       for (const ev of closing) emit(ev);
 
@@ -676,13 +707,18 @@ export class DevinService {
 
       meta.status = failed ? 'error' : 'idle';
       await this.registry.updateStatus(sessionId, meta.status);
-      finalizeRunState(failed ? new Error(result.error ?? result.stopReason ?? 'devin turn failed') : undefined);
+      finalizeRunState(failed ? this.providerFailure(result.error ?? result.stopReason ?? 'devin turn failed', providerError) : undefined);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       const reason = error.message || 'error';
       tlog.error('turn errored before completion: %s', reason);
+      // Lane C (quota): the throw boundary (handshake, ACP exit, prompt timeout,
+      // model application) is classified from its OWN message. An error whose text
+      // merely embeds the provider envelope (e.g. a wrapped handshake failure) is
+      // not the provider refusing the request, and stays `other`.
+      const providerError = classifyDevinError(reason);
       const body = `The Devin turn failed (${reason}).`;
-      const closing = this.closeTurnForError(sessionId, body, Date.now());
+      const closing = this.closeTurnForError(sessionId, body, Date.now(), providerError);
       for (const ev of closing) emit(ev);
       await this.store.finalizeTurn(sessionId, turnId, {
         status: 'error',
@@ -701,18 +737,43 @@ export class DevinService {
         ...(storedNativeId ? { devinNativeSessionId: storedNativeId, nativeSessionId: storedNativeId } : {}),
       }).catch(() => undefined);
       meta.status = 'error';
-      finalizeRunState(error);
+      finalizeRunState(this.providerFailure(reason, providerError));
     }
   }
 
+  /** Build the completion error for a failed turn: typed when the provider class
+   *  is meaningful to a caller, a plain `Error` (the pre-existing shape) otherwise. */
+  private providerFailure(message: string, providerError: DevinErrorClassification | undefined): Error {
+    if (providerError && providerError.kind !== 'other') {
+      return new DevinProviderTurnError(message, providerError.kind, providerError.resetAt);
+    }
+    return new Error(message);
+  }
+
   /** adapter-less error close: emit an error-body assistant triple + agent_end. */
-  private closeTurnForError(sessionId: string, body: string, ts: number): NormalizedEvent[] {
+  private closeTurnForError(
+    sessionId: string,
+    body: string,
+    ts: number,
+    providerError?: DevinErrorClassification,
+  ): NormalizedEvent[] {
     const id = randomUUID();
     return [
       { type: 'message_start', sessionId, timestamp: ts, data: { id, role: 'assistant' } },
       { type: 'message_update', sessionId, timestamp: ts, data: { id, assistantMessageEvent: { type: 'text_delta', delta: body } } },
       { type: 'message_end', sessionId, timestamp: ts, data: { id } },
-      { type: 'agent_end', sessionId, timestamp: ts, data: { result: null, usage: {}, error: body } },
+      {
+        type: 'agent_end',
+        sessionId,
+        timestamp: ts,
+        data: {
+          result: null,
+          usage: {},
+          error: body,
+          ...(providerError ? { errorClass: providerError.kind } : {}),
+          ...(providerError?.resetAt ? { resetAt: providerError.resetAt } : {}),
+        },
+      },
     ];
   }
 

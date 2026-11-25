@@ -58,6 +58,12 @@ export interface CloseTurnInput {
   stopReason?: string;
   cancelled?: boolean;
   error?: string;
+  /** Lane C: the failed turn's provider-error class, when one is known. These
+   *  are the already-shipped broker keys (contract 1.70.0) — the same names and
+   *  value domain the Antigravity runtime uses. Never set from assistant prose. */
+  errorClass?: 'quota' | 'transient' | 'other';
+  /** Lane C: the provider-stated reset instant (ISO 8601), quota only. */
+  resetAt?: string;
 }
 
 export interface AdapterToolRecord {
@@ -318,6 +324,11 @@ export class AcpEventAdapter {
     if (input.cancelled) data.cancelled = true;
     if (input.stopReason) data.stopReason = input.stopReason;
     if (input.error) data.error = input.error;
+    // Lane C (quota handling): additive provider-error annotations. An absent
+    // class or instant writes no key at all, so every pre-existing failure shape
+    // is byte-identical to before.
+    if (input.errorClass !== undefined) data.errorClass = input.errorClass;
+    if (input.resetAt !== undefined) data.resetAt = input.resetAt;
     events.push(this.ev('agent_end', timestamp, data));
     return events;
   }

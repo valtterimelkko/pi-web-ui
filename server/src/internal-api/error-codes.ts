@@ -443,15 +443,20 @@ export const ERROR_CODE_INFO: Record<ErrorCode, ErrorCodeInfo> = {
   },
   [ErrorCode.PROVIDER_QUOTA_EXHAUSTED]: {
     httpStatus: 429,
-    description: 'The model provider reported its quota exhausted (RESOURCE_EXHAUSTED) for the session\'s model.',
-    cause: 'Antigravity forwarded the provider quota envelope: the account or model has no remaining quota. Retrying cannot help until the quota resets.',
+    description: 'The model provider reported its quota exhausted for the session\'s model.',
+    // Lane C (quota): runtime-neutral. Both the Antigravity `RESOURCE_EXHAUSTED`
+    // envelope and Devin's free-model allowance refusal mean the same thing to a
+    // caller — stop until the reset — so the wording names the class, not one vendor.
+    cause: 'The provider refused the turn because the account or model has no remaining allowance: Antigravity forwards `RESOURCE_EXHAUSTED`, Devin reports its free-model rate limit (with the reset it was given). Retrying cannot help until that allowance resets.',
     hint: 'Wait for the provider quota reset (the failed turn\'s agent_end may carry resetAt) or switch the session to another model; do not retry in a loop.',
     docs: 'docs/INTERNAL-API-CONTRACT.md',
   },
   [ErrorCode.PROVIDER_TRANSIENT]: {
     httpStatus: 503,
-    description: 'The model provider was temporarily unavailable for the session\'s model (Google 500/502/503/504).',
-    cause: 'Antigravity forwarded a transient provider envelope (INTERNAL 500, UNAVAILABLE 503, 502, 504): the same request can succeed later.',
+    description: 'The model provider was temporarily unavailable for the session\'s model.',
+    // Lane C (quota): runtime-neutral (the code is still emitted only by the
+    // Antigravity lane today; Devin has no evidenced transient envelope).
+    cause: 'The provider returned a transient server-side failure (Antigravity: INTERNAL 500, UNAVAILABLE 503, 502, 504): the same request can succeed later.',
     hint: 'Retry after a backoff (the goal sweeper waits 30 s on the first strike and 90 s on the second); do not retry instantly.',
     docs: 'docs/INTERNAL-API-CONTRACT.md',
   },

@@ -21,6 +21,7 @@ import type { PiService } from '../../pi/pi-service.js';
 import { CommandCodeRuntimeError, type CommandCodeService } from '../../command-code/command-code-service.js';
 import { commandCodeEventsToScreenEvents } from '../../command-code/command-code-event-adapter.js';
 import type { DevinService } from '../../devin/devin-service.js';
+import { DevinProviderTurnError } from '../../devin/devin-service.js';
 import { resolveDevinCreateModel, type DevinModelEntry } from '../../devin/devin-models.js';
 import type { CommandCodeInternalSessionRecord } from '../../command-code/command-code-session-store.js';
 import type {
@@ -321,6 +322,11 @@ function runtimeErrorCode(error: Error, runtime: SessionRuntime): ErrorCode {
     // provider's quota is exhausted or the provider is temporarily unavailable
     // is named as such on the run receipt, instead of the generic RUNTIME_ERROR.
     if (error instanceof AgyProviderTurnError) return providerErrorCodeFor(error.errorClass);
+    // Lane C (quota): a Devin turn refused for its exhausted free-model allowance
+    // is named on the receipt too, so a parent stops instead of retrying a known
+    // refusal. Same codes and event keys as the Antigravity lane; an unclassified
+    // Devin failure keeps RUNTIME_ERROR below.
+    if (error instanceof DevinProviderTurnError) return providerErrorCodeFor(error.errorClass);
     if (error instanceof PromptNotExecutedError) return ErrorCode.PROMPT_NOT_EXECUTED;
     if (error instanceof GoalActionNotAppliedError) return ErrorCode.GOAL_ACTION_NOT_APPLIED;
     // Contract 1.48.0 (B3a) + 1.50.0 (B3b): the streaming tool-argument and

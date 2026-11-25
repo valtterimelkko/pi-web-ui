@@ -26,6 +26,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { applyChildOomScoreAdj } from '../../oom-score-adj.js';
 import type { DevinCompletedTurn } from '../../devin/devin-service.js';
+import { classifyDevinError } from '../../devin/devin-error-class.js';
 import type { GoalVerificationInfo, SessionGoalProjection } from './types.js';
 
 /** Exact self-report marker the goal prompts ask the model to emit. */
@@ -440,6 +441,27 @@ export function createDevinGoalSweeper(deps: DevinGoalSweeperDeps): DevinGoalSwe
           if (turn.status === 'error') {
             const strikes = (record.consecutiveErrors ?? 0) + 1;
             const errorText = turn.error?.trim() || turn.response.trim() || 'unknown provider error';
+            // Lane C (quota): a provider refusal with a reset cannot be retried
+            // until that reset, so it must never spend further attempts. Classify
+            // the FAILED TURN's own error text only (never `turn.response`, which
+            // is assistant prose and can quote any error), and anchor the
+            // relative statement to the turn's COMPLETION instant so a delayed or
+            // repeated sweep reports exactly the same guidance. Pausing is the
+            // whole recovery: no timer, no automatic resume — `resetAt` is advice.
+            const classification = classifyDevinError(turn.error, { now: () => turn.completedAt });
+            if (classification.kind === 'quota') {
+              const resetNote = classification.resetAt ? ` (resets at ${classification.resetAt})` : '';
+              const patched = await deps.getStore().patch(sessionId, {
+                status: 'paused',
+                pausedReason: 'error',
+                consecutiveErrors: 0,
+                pendingContinuation: false,
+                lastReason: `goal paused: provider quota exhausted${resetNote}; retrying cannot help until the quota resets`,
+                lastVerifiedTurnAt: turn.completedAt,
+              });
+              publishIfChanged(sessionId, patched);
+              continue;
+            }
             if (strikes >= DEVIN_GOAL_MAX_CONSECUTIVE_ERRORS) {
               const patched = await deps.getStore().patch(sessionId, {
                 status: 'paused',
