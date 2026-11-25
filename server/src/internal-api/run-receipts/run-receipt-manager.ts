@@ -160,6 +160,22 @@ export interface CompletionCaptureNotification {
   receipt: RunReceipt;
 }
 
+/**
+ * Lane A correction §1: the disjoint lease-holding population per runtime.
+ *
+ * Every run counted here holds an admission permit RIGHT NOW. The four maps
+ * partition that population: `active` excludes queued receipts, and
+ * `quarantined` is the quarantined subset of `draining` (never also counted as
+ * draining). Their sum is the number of attached leases, which is what Lane B
+ * subtracts from the admission count.
+ */
+export interface LeaseOwnershipSnapshot {
+  activeByRuntime: Partial<Record<SessionRuntime, number>>;
+  queuedByRuntime: Partial<Record<SessionRuntime, number>>;
+  drainingByRuntime: Partial<Record<SessionRuntime, number>>;
+  quarantinedByRuntime: Partial<Record<SessionRuntime, number>>;
+}
+
 export type ExistingRunResult =
   | { kind: 'duplicate'; receipt: RunReceipt }
   | { kind: 'conflict'; receipt: RunReceipt };
@@ -231,6 +247,10 @@ export class RunReceiptManager {
   private readonly neverStartedListeners: Array<(receipt: RunReceipt) => void> = [];
   /** C3a (contract 1.58.0): fired once per run whose output carried a completion block (parsed or rejected). */
   private readonly completionListeners: Array<(capture: CompletionCaptureNotification) => void> = [];
+  /** Lane A correction §3: fired for EVERY terminal transition, so a receipt-scoped
+   *  owner (the Devin follow-up branch) can release its own still-queued item
+   *  however the run ended — not only on the paths that remember to clean up. */
+  private readonly terminalListeners: Array<(receipt: RunReceipt) => void> = [];
   private readonly isRuntimeQuiescent?: (sessionId: string) => Promise<boolean>;
   private readonly drainTimeoutMs: number;
   private readonly drainPollMs: number;
@@ -313,6 +333,27 @@ export class RunReceiptManager {
    * rejected (`completionError`). The Internal API wiring uses it to feed the
    * per-session latest-completion surface with a `{ runId }` source.
    */
+  /**
+   * Lane A correction §3: observe EVERY terminal transition (completion,
+   * cancellation, stall, restart recovery, targeted removal). The callback must
+   * be cheap and must not throw; it runs after the terminal write settles.
+   */
+  addTerminalListener(listener: (receipt: RunReceipt) => void): void {
+    this.terminalListeners.push(listener);
+  }
+
+  private fireTerminalListeners(record: PersistedRunReceipt): void {
+    if (this.terminalListeners.length === 0) return;
+    const receipt = toPublicReceipt(record);
+    for (const listener of this.terminalListeners) {
+      try {
+        listener(receipt);
+      } catch (error) {
+        logger.warn(`terminal listener failed for run ${record.runId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
   addCompletionListener(listener: (capture: CompletionCaptureNotification) => void): void {
     this.completionListeners.push(listener);
   }
@@ -1109,6 +1150,7 @@ export class RunReceiptManager {
       elapsedMs(record.acceptedAt, record.terminalAt),
     );
     this.resolveTerminalWaiters(toPublicReceipt(record));
+    this.fireTerminalListeners(record);
     // §11 fence: cancellation/stall leaves runtime cessation unconfirmed, so the
     // admission slot is held (not reusable) until the runtime confirms quiescent
     // or the drain timeout elapses (bounded quarantine). Normal completion
@@ -1246,6 +1288,64 @@ export class RunReceiptManager {
       if (entry.sessionId === sessionId) return true;
     }
     return false;
+  }
+
+  /**
+   * Lane A correction (03-parent-correction.md §1) — the mandatory Lane B seam.
+   *
+   * A synchronous, read-only census of ADMISSION LEASES ACTUALLY HELD, so the
+   * turn-count mismatch can be computed as `admission - sum(snapshot)` and the
+   * remainder is a real "unexplained" figure instead of a blind subtraction.
+   *
+   * Ownership is the presence of `ActiveRun.lease` — NOT receipt existence and
+   * NOT status alone. That distinction is the whole point:
+   *
+   *  - a joined/steer receipt observes another request's turn and never attaches
+   *    a lease, and a Pi queued follow-up returns before any permit is taken.
+   *    Both are tracked runs with a receipt but own no permit, so counting them
+   *    would MASK a genuine leak (the reverse band in health-alerts).
+   *  - a terminal run whose cessation is unconfirmed still holds its lease; it
+   *    lives in `draining` until released, and its quarantined subset lives in
+   *    the same map. Quarantine is therefore counted ONCE, as a split of
+   *    draining, never in both.
+   *
+   * The four maps are a DISJOINT partition of the lease-holding population:
+   * `active` excludes queued receipts, `draining` excludes quarantined ones.
+   *
+   * Reads only the already-loaded `activeRuns`/`draining` maps: no disk, no
+   * store read, no lock, no promise. A settlement probe must be readable in one
+   * tick, otherwise Lane B's subtraction compares two different moments.
+   */
+  getLeaseOwnershipSnapshot(): LeaseOwnershipSnapshot {
+    const snapshot: LeaseOwnershipSnapshot = {
+      activeByRuntime: {},
+      queuedByRuntime: {},
+      drainingByRuntime: {},
+      quarantinedByRuntime: {},
+    };
+    const bump = (
+      target: Partial<Record<SessionRuntime, number>>,
+      runtime: SessionRuntime | undefined,
+    ): void => {
+      const key = runtime ?? 'pi';
+      target[key] = (target[key] ?? 0) + 1;
+    };
+
+    for (const [runId, active] of this.activeRuns) {
+      if (!active.lease) continue;
+      // Queue-pending is not executing; it keeps its own category so the
+      // active figure never over-reports work in flight.
+      const receipt = this.store.get(runId);
+      if (receipt?.status === 'queued') bump(snapshot.queuedByRuntime, active.runtime);
+      else bump(snapshot.activeByRuntime, active.runtime);
+    }
+    for (const entry of this.draining.values()) {
+      bump(
+        entry.quarantined ? snapshot.quarantinedByRuntime : snapshot.drainingByRuntime,
+        entry.runtime,
+      );
+    }
+    return snapshot;
   }
 
   /** L1: age in ms of the oldest quarantined entry, or undefined when none. */

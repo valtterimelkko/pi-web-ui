@@ -729,6 +729,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     store: new RunReceiptStore(deps.runReceiptDir),
     idempotencyTtlMs: deps.runReceiptIdempotencyTtlMs,
   });
+  // Lane A correction §3 (was B6): receipt-scoped terminal cleanup, registered
+  // as a TERMINAL LISTENER rather than at one call site, because every way a run
+  // can end must release its own still-queued item. Identity-based
+  // (`cancelQueuedItem(runId)`), so it can only remove that item: never the
+  // session's executing turn, never a FIFO neighbour.
+  runReceipts.addTerminalListener((receipt) => {
+    void cleanupTerminalQueuedItem(receipt.runId, receipt.sessionId, receipt.runtime, receipt);
+  });
+
   // C3a (contract 1.58.0): latest completion per session. The registry feeds
   // from two sources — the run-receipt capture (source {runId}) and the
   // broker observation tap below (source session_turn, which sees every
@@ -3604,6 +3613,42 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     } catch (err) {
       logger.errorObject('Failed to delete session', err);
       sendJson(res, 500, { error: 'Failed to delete session', code: ErrorCode.INTERNAL_ERROR });
+    }
+  }
+
+  /**
+   * Lane A correction §3: remove a TERMINAL receipt's own queue entry if it is
+   * still waiting, and nothing else.
+   *
+   * Only `removed` is actionable. `dispatched` means the dequeue won the race and
+   * the message really is executing (the receipt stays whatever it already says);
+   * `unknown` means the owning runtime cannot tell us, so the receipt is not
+   * upgraded to a non-execution claim it cannot support.
+   */
+  async function cleanupTerminalQueuedItem(
+    runId: string,
+    sessionId: string,
+    runtime: SessionRuntime,
+    receipt: RunReceipt | undefined,
+  ): Promise<void> {
+    if (runtime !== 'devin' || !devinService) return;
+    // Only a receipt that was QUEUED and is now terminal can own a live queue
+    // entry; a dispatched one owns the executing turn instead.
+    const wasQueued = receipt?.liveness?.delivery?.state === 'queued';
+    if (!wasQueued) return;
+    try {
+      const outcome = devinService.cancelQueuedItem(sessionId, runId);
+      if (outcome === 'removed') {
+        await runReceipts.markItemRemoved(runId);
+        logger.info(`[InternalAPI] Terminal receipt ${runId} released its still-queued item (never executed)`);
+      } else if (outcome === 'dispatched') {
+        logger.info(`[InternalAPI] Terminal receipt ${runId} lost the dequeue race; its item is executing and was left alone`);
+      } else {
+        logger.warn(`[InternalAPI] Terminal receipt ${runId}: queue state unknown; delivery left unconfirmed`);
+      }
+    } catch (error) {
+      // Never let cleanup break the terminal write or the caller's response.
+      logger.warn(`Terminal queue cleanup failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
