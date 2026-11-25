@@ -232,6 +232,16 @@ const AGY_POST_TURN_C_1_70_0_ROW: StabilityExceptionRow = {
   version: '1.70.0',
 };
 
+/** The live table's sixteenth row (INTERNAL-API-QUEUED-DELIVERY-AND-ALERT-ROBUSTNESS-PLAN):
+ *  the owner's plan-approved additive minor bump for receipt delivery evidence
+ *  and Devin provider-quota classification. */
+const QUEUED_DELIVERY_1_71_0_ROW: StabilityExceptionRow = {
+  date: "2026-11-25",
+  decision: "INTERNAL-API-QUEUED-DELIVERY-AND-ALERT-ROBUSTNESS-PLAN (owner plan of record: execute the plan end to end, 25 Nov 2026)",
+  what: "1.71.0: optional `RunLivenessEvidence.delivery` describes receipt-owned queue/dispatch/removal facts or unconfirmed/late-terminal evidence; queued execution clocks begin at actual dispatch, targeted cancellation cannot abort unrelated work, and no-activity outcomes no longer assert unproven non-execution. Existing provider-quota vocabulary and broker `errorClass`/`resetAt` also cover Devin's evidenced free-model refusal; its goal pauses without autonomous quota retries. No new route, error code or default; optional receipt evidence and additive event semantics.",
+  version: "1.71.0",
+};
+
 const CH_TG_1_66_0_ROW: StabilityExceptionRow = {
   date: '2026-10-19',
   decision: 'CHANNEL plan (owner plan of record; design `CHANNEL.md` §7, lane ch-tg)',
@@ -267,8 +277,8 @@ describe('contract stability window (C6)', () => {
       expect(parsed?.openEnded).toBe(true);
     });
 
-    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row, the wave K 1.60.0 row, the W0-c 1.61.0 row, the W2 1.62.0 row, the step 1i.2 B 1.63.0 row, the step 1i.3 1.64.0 row, the step 1k 1.65.0 row, the ch-tg 1.66.0 row, the devin-parity A1 1.67.0 row the devin-parity C1 1.68.0 row, the devin worklog 1.69.0 row, the devin D5 1.69.1 row, the 1.69.1 snapshot-correction row and the agy-post-turn lane C 1.70.0 row', () => {
-      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW, W0C_1_61_0_ROW, W2_1_62_0_ROW, STEP1I2B_1_63_0_ROW, STEP1I3_1_64_0_ROW, STEP1K_1_65_0_ROW, CH_TG_1_66_0_ROW, DEVIN_A1_1_67_0_ROW, DEVIN_C1_1_68_0_ROW, DEVIN_WL_1_69_0_ROW, DEVIN_D5_1_69_1_ROW, SNAPSHOT_RETENTION_1_69_1_ROW, AGY_POST_TURN_C_1_70_0_ROW]);
+    it('parses the live exception table: the retroactive 1.58.5 row, the L1 1.59.0 row, the wave K 1.60.0 row, the W0-c 1.61.0 row, the W2 1.62.0 row, the step 1i.2 B 1.63.0 row, the step 1i.3 1.64.0 row, the step 1k 1.65.0 row, the ch-tg 1.66.0 row, the devin-parity A1 1.67.0 row the devin-parity C1 1.68.0 row, the devin worklog 1.69.0 row, the devin D5 1.69.1 row, the 1.69.1 snapshot-correction row, the agy-post-turn lane C 1.70.0 row and the queued-delivery 1.71.0 row', () => {
+      expect(parsed?.exceptions).toEqual([RETROACTIVE_1_58_5_ROW, L1_1_59_0_ROW, K_1_60_0_ROW, W0C_1_61_0_ROW, W2_1_62_0_ROW, STEP1I2B_1_63_0_ROW, STEP1I3_1_64_0_ROW, STEP1K_1_65_0_ROW, CH_TG_1_66_0_ROW, DEVIN_A1_1_67_0_ROW, DEVIN_C1_1_68_0_ROW, DEVIN_WL_1_69_0_ROW, DEVIN_D5_1_69_1_ROW, SNAPSHOT_RETENTION_1_69_1_ROW, AGY_POST_TURN_C_1_70_0_ROW, QUEUED_DELIVERY_1_71_0_ROW]);
       const withRows = parseStabilityWindow(
         [
           '### Stability window',
@@ -287,12 +297,12 @@ describe('contract stability window (C6)', () => {
   });
 
   describe('version guard', () => {
-    it('accepts the live contract version now that the 1.70.0 exception row names it', () => {
+    it('accepts the live contract version now that the 1.71.0 exception row names it', () => {
       expect(parsed).not.toBeNull();
       const verdict = guardContractVersion(INTERNAL_API_CONTRACT_VERSION, parsed!.exceptions);
       expect(verdict.problems).toEqual([]);
       expect(verdict.ok).toBe(true);
-      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.70');
+      expect(majorMinor(INTERNAL_API_CONTRACT_VERSION)).toBe('1.71');
     });
 
     it('refuses the live contract version when the exception row is absent (the window rule still bites)', () => {

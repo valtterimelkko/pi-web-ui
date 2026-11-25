@@ -66,7 +66,8 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * `PROVIDER_TRANSIENT` error codes (the failed agy turn's `errorClass` /
  * `resetAt` ride the broker `agent_end`, outside the snapshot's shapes). The
  * snapshot is re-based at **1.71.0** (2026-11-25, queued-delivery robustness,
- * owner plan-of-record exception): optional RunLivenessEvidence.delivery and
+ * owner plan-of-record exception): optional RunLivenessEvidence.delivery (incl. basis
+ * dispatch_barrier_expired) and
  * RunDeliveryEvidence. Route/code sets unchanged. The ENFORCED fingerprint is
  * the SHA-256 of the snapshot's canonical shape: the parsed snapshot with the
  * top-level `contractVersion` field removed, serialised with recursively
@@ -74,7 +75,7 @@ export const WINDOW_OPEN_DATE = '2026-09-30';
  * still match). The full-file hash is informational (kept at the 1.58.0
  * opening version for the record).
  */
-export const BASELINE_SHAPE_SHA256 = '30bf51ea5c079ce47072d95744dc1e54f9ac054bbe205e47066771f6555b06db';
+export const BASELINE_SHAPE_SHA256 = '019e885375e77f2e6a09dfc2088818e70615a7fa0343c55c6ef39a1e52dfa50b';
 export const BASELINE_FULL_SHA256 = 'fab83d8b2c237d0f8d43733dbeff60fb45c2ee690cfe7ca2b1cc044da4dc5fec';
 
 /** Sorted route keys of the snapshot at 1.58.0 (the window's route baseline). */

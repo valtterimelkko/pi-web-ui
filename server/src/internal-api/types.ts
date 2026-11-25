@@ -1183,7 +1183,9 @@ export type RunDeliveryState =
   | 'unconfirmed'
   | 'late_terminal_observed';
 
-/** Why the delivery evidence says what it says (low-cardinality, bounded). */
+/** Why the delivery evidence says what it says (low-cardinality, bounded).
+ *  `dispatch_barrier_expired`: a service reservation whose awaited dispatch
+ *  barrier never completed; the acceptance ceiling fenced it as UNCONFIRMED. */
 export type RunDeliveryBasis =
   | 'follow_up_queue'
   | 'dequeue'
@@ -1192,8 +1194,6 @@ export type RunDeliveryBasis =
   | 'queue_state_unknown'
   | 'memory_queue_lost_at_restart'
   | 'late_terminal'
-  /** Correction 05 §1: a service reservation whose awaited dispatch barrier
-   *  never completed; the acceptance ceiling fenced it as UNCONFIRMED. */
   | 'dispatch_barrier_expired';
 
 export interface RunDeliveryEvidence {

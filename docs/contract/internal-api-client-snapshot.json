@@ -2230,7 +2230,7 @@
           "type": "| 'queued' | 'dispatched' | 'cancelled_before_dispatch' | 'unconfirmed' | 'late_terminal_observed'"
         },
         "basis": {
-          "type": "| 'follow_up_queue' | 'dequeue' | 'targeted_removal' | 'follow_up_race' | 'queue_state_unknown' | 'memory_queue_lost_at_restart' | 'late_terminal'"
+          "type": "| 'follow_up_queue' | 'dequeue' | 'targeted_removal' | 'follow_up_race' | 'queue_state_unknown' | 'memory_queue_lost_at_restart' | 'late_terminal' | 'dispatch_barrier_expired'"
         },
         "observedAt": {
           "type": "string"
