@@ -188,6 +188,37 @@ class TurnStalledError extends Error {
 }
 
 /**
+ * Lane A (W1): a Devin follow-up lost the race with turn completion.
+ *
+ * The item provably never entered the queue (the service decided the session
+ * was no longer running), so this is a KNOWN undelivered case — not an unknown
+ * one. It is typed so the receipt can say `never_dispatched` and the notice can
+ * safely advise a re-dispatch, instead of the previous bare "resend as a plain
+ * prompt" runtime error that told the caller nothing about delivery.
+ */
+class DevinFollowUpRaceError extends Error {
+  constructor() {
+    super('The session stopped running a turn before the follow-up could be queued; the message was not delivered');
+    this.name = 'DevinFollowUpRaceError';
+  }
+}
+
+/**
+ * Correction 05 §2: the queued item's awaited dispatch barrier refused to let the
+ * prompt through, because the receipt it stamped was terminal or missing. The
+ * runtime side effect for this item did NOT happen.
+ */
+class DevinDispatchStampError extends Error {
+  constructor(
+    public readonly itemId: string,
+    public readonly cause: Error,
+  ) {
+    super(`Queued follow-up ${itemId} was not dispatched: ${cause.message}`);
+    this.name = 'DevinDispatchStampError';
+  }
+}
+
+/**
  * C2 (contract 1.57.0): the run's receipt reached a terminal state but the
  * runtime adapter never handed the synchronous dispatch chain back within the
  * post-terminal settle window — the R2 input shape (a terminal receipt with
@@ -713,6 +744,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     store: new RunReceiptStore(deps.runReceiptDir),
     idempotencyTtlMs: deps.runReceiptIdempotencyTtlMs,
   });
+  // Lane A correction §3 (was B6): receipt-scoped terminal cleanup, registered
+  // as a TERMINAL LISTENER rather than at one call site, because every way a run
+  // can end must release its own still-queued item. Identity-based
+  // (`cancelQueuedItem(runId)`), so it can only remove that item: never the
+  // session's executing turn, never a FIFO neighbour.
+  runReceipts.addTerminalListener((receipt) => {
+    void cleanupTerminalQueuedItem(receipt.runId, receipt.sessionId, receipt.runtime, receipt);
+  });
+
   // C3a (contract 1.58.0): latest completion per session. The registry feeds
   // from two sources — the run-receipt capture (source {runId}) and the
   // broker observation tap below (source session_turn, which sees every
@@ -756,6 +796,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
   // loop, memory, sockets) caused by in-flight P2 turns — that requires process
   // isolation (Phase 6 per-session cgroups).
   const admission = deps.admissionController ?? new AdmissionController();
+  // Lane A (W1): targeted removal of ONE queued delivery. The run manager owns the
+  // clock (a queued receipt that exceeded its absolute acceptance ceiling) but only
+  // the runtime owns the queue, so the route binds this late exactly like the
+  // quarantine source above. This keeps `server.ts` (excluded from this lane) out
+  // of the change: the seam is registered here, where the Devin service is already
+  // in scope.
+  runReceipts.setCancelQueuedDelivery(async (runId, sessionId, runtime) => {
+    if (runtime !== 'devin' || !devinService) return 'unknown';
+    return devinService.cancelQueuedItem(sessionId, runId);
+  });
   // Contract 1.62.0 (W2-f): let admission refusals name quarantined lease debt.
   if (typeof admission.setQuarantineSource === 'function' && typeof runReceipts.getQuarantinedByRuntime === 'function') {
     admission.setQuarantineSource(() => ({
@@ -1428,8 +1478,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       },
     };
     runReceipts.attachLease(runId, wrappedLease);
+    // Lane A (W1): a Devin follow-up is QUEUE acceptance, not dispatch. Recording
+    // it as `started` before the service queues it is exactly the defect that
+    // produced eight false NEVER_STARTED alerts (audit §2A): the start clock began
+    // at acceptance and the notice claimed the message never ran while it waited
+    // in the FIFO queue and later executed. Record `queued` here; the service's
+    // awaited dequeue barrier stamps `started`.
+    const devinQueued = runtime === 'devin' && dispatchMode === 'follow_up';
     try {
-      await runReceipts.markStarted(runId);
+      if (devinQueued) await runReceipts.markQueued(runId);
+      else await runReceipts.markStarted(runId);
     } catch {
       await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
       return { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR };
@@ -3573,6 +3631,50 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
     }
   }
 
+  /**
+   * Lane A correction §3: remove a TERMINAL receipt's own queue entry if it is
+   * still waiting, and nothing else.
+   *
+   * Only `removed` is actionable. `dispatched` means the dequeue won the race and
+   * the message really is executing (the receipt stays whatever it already says);
+   * `unknown` means the owning runtime cannot tell us, so the receipt is not
+   * upgraded to a non-execution claim it cannot support.
+   */
+  async function cleanupTerminalQueuedItem(
+    runId: string,
+    sessionId: string,
+    runtime: SessionRuntime,
+    receipt: RunReceipt | undefined,
+  ): Promise<void> {
+    if (runtime !== 'devin' || !devinService) return;
+    // Only a receipt that was QUEUED and is now terminal can own a live queue
+    // entry; a dispatched one owns the executing turn instead.
+    const wasQueued = receipt?.liveness?.delivery?.state === 'queued';
+    if (!wasQueued) return;
+    try {
+      const outcome = devinService.cancelQueuedItem(sessionId, runId);
+      if (outcome === 'removed') {
+        // Correction 05, non-blocking evidence issue: this receipt is ALREADY
+        // terminal, and `markItemRemoved` deliberately returns a terminal receipt
+        // unchanged. Calling it here recorded nothing, so the earlier handback's
+        // claim that it "records the honest outcome" was simply not true.
+        //
+        // The removal itself is still real and still worth doing — the item can
+        // no longer execute. But the delivery evidence is NOT rewritten: the
+        // receipt's own terminal decision stands, and no capacity is released on
+        // the strength of a claim it cannot support.
+        logger.info(`[InternalAPI] Terminal receipt ${runId} released its still-queued item (never executed); existing terminal delivery evidence left intact`);
+      } else if (outcome === 'dispatched') {
+        logger.info(`[InternalAPI] Terminal receipt ${runId} lost the dequeue race; its item is executing and was left alone`);
+      } else {
+        logger.warn(`[InternalAPI] Terminal receipt ${runId}: queue state unknown; delivery left unconfirmed`);
+      }
+    } catch (error) {
+      // Never let cleanup break the terminal write or the caller's response.
+      logger.warn(`Terminal queue cleanup failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   async function executePromptWithReceipt(
     runId: string,
     sessionId: string,
@@ -3600,20 +3702,55 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       // is deliberately deferred until this write completes, so even an SSE
       // client cannot observe success before its terminal receipt is durable.
       const busy = error ? isRuntimeAlreadyRunningError(error) : false;
-      const terminalWrite = busy
+      // Lane A (W1): a Devin follow-up that lost the race with turn completion
+      // provably never entered the queue. Record that as KNOWN non-delivery (via
+      // `markItemUnconfirmed`-style evidence) rather than a bare runtime error, so
+      // the notice can advise a retry it has actually proven safe.
+      const followUpRace = error instanceof DevinFollowUpRaceError;
+      // Correction 06 §2 (review finding 2, parent answers 06-q1/q2/q3): the real
+      // `cancelQueuedItem` calls this callback with `DevinQueuedItemCancelled`
+      // SYNCHRONOUSLY, before returning. Writing a generic `failed / RUNTIME_ERROR`
+      // here made the removal owner's later write a no-op on an already-terminal
+      // receipt, so the frozen evidence ("proven removal ⇒ cancelled_before_dispatch,
+      // only that lease released") was never produced end to end.
+      //
+      // A TARGETED removal has an owner that writes the proven outcome immediately
+      // after this callback returns, so this must not write first. An abort/dispose
+      // has NO other owner, so it settles here as an honest proven removal.
+      //
+      // Discriminate on `name` + `source`, not `instanceof` alone: the service
+      // module can be loaded twice (route vs service import graph), which yields a
+      // second class object and a false negative.
+      const queuedCancelled = error instanceof Error && error.name === 'DevinQueuedItemCancelled';
+      const cancelSource = queuedCancelled
+        ? ((error as { source?: string }).source ?? 'targeted_removal')
+        : undefined;
+      const removalOwnedElsewhere = queuedCancelled && cancelSource === 'targeted_removal';
+      if (queuedCancelled && !removalOwnedElsewhere) {
+        logger.info(
+          `[InternalAPI] Queued item ${runId} cancelled by ${cancelSource} (no other owner): settling as proven non-execution`,
+        );
+      }
+      const terminalWrite = removalOwnedElsewhere
+        ? Promise.resolve(undefined)
+        : queuedCancelled
+          ? runReceipts.markItemRemoved(runId)
+          : busy
         ? runReceipts.rejectBeforeDispatch(runId, { status: 'cancelled', errorCode: ErrorCode.SESSION_BUSY })
-        : runReceipts.finish(runId, error
-          ? {
-              status: 'failed',
-              errorCode: isExecutionPolicyError(error)
-                ? error.code
-                : error instanceof PiModelBindingError
-                  ? ErrorCode.MODEL_NOT_APPLIED
-                  : runtimeErrorCode(error, runtime),
-            }
-          : cessationBasis
-            ? { status: 'completed', cessationBasis }
-            : {});
+        : followUpRace
+          ? runReceipts.markFollowUpRaceLost(runId)
+          : runReceipts.finish(runId, error
+            ? {
+                status: 'failed',
+                errorCode: isExecutionPolicyError(error)
+                  ? error.code
+                  : error instanceof PiModelBindingError
+                    ? ErrorCode.MODEL_NOT_APPLIED
+                    : runtimeErrorCode(error, runtime),
+              }
+            : cessationBasis
+              ? { status: 'completed', cessationBasis }
+              : {});
       persistence = terminalWrite.then((receipt) => {
         if (receipt?.phase7Shadow) logPhase7Shadow(runId, receipt.phase7Shadow);
         return receipt;
@@ -4395,8 +4532,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         },
       };
       if (!joinedExecution) runReceipts.attachLease(runId, admissionLease);
+      // Lane A (W1): the ordinary route marked `queued` for Pi only, so a Devin
+      // follow-up fell through to `markStarted` and suffered the same false
+      // NEVER_STARTED as the wake path (audit §2A: "correct on BOTH wake and
+      // ordinary dispatch paths"). A Devin follow-up here is queue acceptance;
+      // the service's awaited dequeue barrier stamps `started` later.
+      const devinQueued = runtime === 'devin' && dispatchMode === 'follow_up';
       try {
-        await runReceipts.markStarted(runId);
+        if (devinQueued) await runReceipts.markQueued(runId);
+        else await runReceipts.markStarted(runId);
       } catch (error) {
         await runReceipts.rejectBeforeDispatch(runId, { status: 'failed', errorCode: ErrorCode.INTERNAL_ERROR }).catch(() => undefined);
         logger.errorObject(`Failed to start run receipt ${runId}`, error);
@@ -4555,6 +4699,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       disconnectHandled = true;
       void (async () => {
         try {
+          // Lane A (W1): a QUEUED run has no execution authority. Cancelling it
+          // must remove only its own queue item — never clear the session's queue
+          // or abort the unrelated turn that happens to be running. Before this,
+          // a disconnect on a waiting follow-up called `devinService.abort()`,
+          // which cancels the live client turn AND every queued neighbour
+          // (audit/critique finding 1: the "broad queue clear" the brief forbids).
+          const queuedDevin = runtime === 'devin' && runReceipts.get(runId)?.status === 'queued';
+          if (queuedDevin) {
+            const removal = devinService?.cancelQueuedItem(sessionId, runId) ?? 'unknown';
+            if (removal === 'removed') {
+              await runReceipts.markItemRemoved(runId);
+            } else if (removal === 'unknown') {
+              // Neither proven run nor proven removed: say exactly that.
+              await runReceipts.markItemUnconfirmed(runId, 'queue_state_unknown');
+            }
+            // `dispatched`: the item is now the live turn, so the ordinary
+            // cancel path below owns it on a later close.
+            return;
+          }
           const cancelled = await runReceipts.cancelRun(runId);
           // Completion may win the race while the client connection closes.
           // Never abort a runtime after its receipt became terminal.
@@ -4633,6 +4796,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
         return;
       }
 
+      // Lane A (W1): explicit session abort keeps its broad semantics (it stops
+      // the live turn AND clears the queue). What changes is that the queued
+      // items are now settled HONESTLY: they were provably removed before
+      // dispatch, so each is recorded as proven non-execution instead of a
+      // generic cancellation with unknown delivery. Capture them first — the
+      // abort clears the queue synchronously — then record the removal.
+      const queuedBeforeAbort = entry.sdkType === 'devin'
+        ? runReceipts.listBySession(sessionId).filter((receipt) => receipt.status === 'queued')
+        : [];
+      if (entry.sdkType === 'devin') devinService?.abort(sessionId);
+      for (const receipt of queuedBeforeAbort) {
+        await runReceipts.markItemRemoved(receipt.runId).catch(() => undefined);
+      }
+
       await runReceipts.cancelSession(sessionId);
 
       if (entry.sdkType === 'claude') {
@@ -4642,7 +4819,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
       } else if (entry.sdkType === 'antigravity') {
         antigravityService.abort(sessionId);
       } else if (entry.sdkType === 'devin') {
-        devinService?.abort(sessionId);
+        // Already aborted above, before the queued receipts were classified.
       } else {
         const agentSession = multiSessionManager.getAgentSession(entry.path);
         if (agentSession) {
@@ -7557,9 +7734,44 @@ export function createSessionRoutes(deps: SessionRoutesDeps) {
           if (mode === 'follow_up') {
             // FIFO server-side queue drained between turns (brief design
             // point 7). A false return is a lost race with turn completion.
-            devinService.followUp(sessionId, message, broadcast, wrappedComplete)
+            //
+            // Lane A (W1): the run receipt id travels as the item id so a
+            // targeted cancellation and the delivery evidence refer to the SAME
+            // identity, and the dequeue barrier persists `started` before the
+            // prompt reaches the runtime. A failed barrier rejects, so the
+            // service does not execute the message.
+            devinService.followUp(sessionId, message, broadcast, wrappedComplete, {
+              ...(runId ? { itemId: runId } : {}),
+              ...(runId
+                ? {
+                    onDispatched: async () => {
+                      // Correction 05 §2 (parent probe): `markStarted` returns an
+                      // already-terminal receipt UNCHANGED. Ignoring that return
+                      // let a cancelled or expired item — already shifted out of
+                      // the queue — resolve the barrier and then EXECUTE after
+                      // the decision was made.
+                      //
+                      // The barrier must positively verify what it stamped. A
+                      // terminal or missing receipt means the run has already
+                      // been decided, so it rejects and the service performs no
+                      // runtime side effect for this item.
+                      const stamped = await runReceipts.markStarted(runId);
+                      if (!stamped || stamped.status !== 'started') {
+                        throw new DevinDispatchStampError(
+                          runId,
+                          new Error(
+                            stamped
+                              ? `receipt is already ${stamped.status}, not started`
+                              : 'receipt no longer exists',
+                          ),
+                        );
+                      }
+                    },
+                  }
+                : {}),
+            })
               .then((queued: boolean) => {
-                if (!queued) wrappedComplete(new Error('session is no longer running a turn; resend as a plain prompt'));
+                if (!queued) wrappedComplete(new DevinFollowUpRaceError());
               })
               .catch((err: unknown) => {
                 wrappedComplete(err instanceof Error ? err : new Error(String(err)));

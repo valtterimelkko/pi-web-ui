@@ -68,11 +68,70 @@ function blankMeta(now = Date.now()): ActiveSessionMeta {
   return { lastActivity: now, pinned: false, pinClaims: new Set(), status: 'idle' };
 }
 
+/**
+ * Lane A (W1): one queued follow-up with its own identity and lifecycle state.
+ *
+ * Before this, a queue item was an anonymous {prompt, onEvent, onComplete}
+ * triple: no receipt-scoped cancellation was possible, so `abort()` had to clear
+ * the whole queue, and nothing could tell "still waiting" from "being
+ * dispatched".
+ *
+ * States: `queued` → `dispatched` (dequeue decided, stamp in flight) → running
+ * (the turn itself). Cancellation succeeds only in `queued`.
+ */
 interface QueuedTurn {
+  /** Stable identity: the Internal API run id when the caller supplies one. */
+  itemId: string;
+  state: 'queued' | 'dispatched';
   prompt: string;
   onEvent: (event: NormalizedEvent) => void;
   onComplete: (err?: Error) => void;
+  /**
+   * Awaited dispatch barrier: the owning route persists the `started` receipt
+   * (and its delivery evidence) here BEFORE the prompt reaches the runtime. A
+   * rejection fails the item without executing it — a run whose dispatch could
+   * not be recorded must never run silently.
+   */
+  onDispatched?: () => Promise<void> | void;
 }
+
+/**
+ * Lane A: typed, item-scoped cancellation (never a generic runtime error).
+ *
+ * Correction 06 §2 (parent answer 06-q2): `source` says WHO removed the item,
+ * because that decides who records the outcome. A targeted removal has a caller
+ * that writes the proven-removal receipt straight afterwards, so the route must
+ * not write first. An abort or dispose has no other owner, so the route must
+ * still write an honest terminal receipt itself.
+ */
+export class DevinQueuedItemCancelled extends Error {
+  constructor(
+    public readonly itemId: string,
+    reason = 'removed before dispatch',
+    public readonly source: 'targeted_removal' | 'session_abort' | 'session_disposed' = 'targeted_removal',
+  ) {
+    super(`Devin queued follow-up ${itemId} was cancelled: ${reason}`);
+    this.name = 'DevinQueuedItemCancelled';
+  }
+}
+
+/** Lane A: the awaited dispatch barrier failed; the item was NOT executed. */
+export class DevinDispatchStampError extends Error {
+  constructor(public readonly itemId: string, public readonly cause: Error) {
+    super(`Devin queued follow-up ${itemId} was not dispatched: the dispatch record could not be persisted (${cause.message})`);
+    this.name = 'DevinDispatchStampError';
+  }
+}
+
+export interface FollowUpOptions {
+  /** Stable identity for targeted cancellation and delivery evidence. */
+  itemId?: string;
+  /** Awaited before the prompt reaches the runtime (see QueuedTurn.onDispatched). */
+  onDispatched?: () => Promise<void> | void;
+}
+
+/** Lane A: what a targeted cancellation actually established. */
+export type QueuedItemCancelOutcome = 'removed' | 'dispatched' | 'unknown';
 
 /** Latest finalized turn of a session, in the shape the devin goal sweeper
  *  consumes (contract 1.68.0; antigravity shape). `status: 'error'` marks a
@@ -114,6 +173,10 @@ export class DevinService {
   private adapters = new Map<string, AcpEventAdapter>();
   /** FIFO follow-up queue while a turn runs (antigravity semantics). */
   private turnQueues = new Map<string, QueuedTurn[]>();
+  /** Lane A (W1): items that left the queue and are being dispatched/running,
+   *  keyed by session. Kept so a targeted cancel can answer `dispatched`
+   *  truthfully instead of guessing `unknown`. Pruned when the turn settles. */
+  private activeQueueItems = new Map<string, Set<string>>();
   private promptCallbacks = new Map<string, { onEvent: (e: NormalizedEvent) => void; onComplete: (err?: Error) => void }>();
   private apiObservers: Map<string, Set<(event: NormalizedEvent) => void>> = new Map();
   private sessionEventSinks = new Map<string, (event: NormalizedEvent) => void>();
@@ -268,17 +331,31 @@ export class DevinService {
    * antigravity semantics). Returns false when the session is not running a
    * turn; the caller should send a normal prompt instead. Steer is NOT
    * supported (the service refuses busy prompts with SESSION_BUSY).
+   *
+   * Lane A (W1): the return stays a boolean so the browser WebSocket caller
+   * (`websocket/connection.ts`) is unchanged; the optional `opts` carry the
+   * Internal API's receipt identity and its awaited dispatch barrier. The
+   * busy decision and the enqueue happen in this one synchronous step, so a
+   * message can never be accepted into a queue that has already drained.
    */
   async followUp(
     sessionId: string,
     prompt: string,
     onEvent: (event: NormalizedEvent) => void,
     onComplete: (error?: Error) => void,
+    opts: FollowUpOptions = {},
   ): Promise<boolean> {
     if (!this.enabled()) throw new Error('Devin is disabled');
     if (!this.runningSessions.has(sessionId)) return false;
     const queue = this.turnQueues.get(sessionId) ?? [];
-    queue.push({ prompt, onEvent, onComplete });
+    queue.push({
+      itemId: opts.itemId ?? randomUUID(),
+      state: 'queued',
+      prompt,
+      onEvent,
+      onComplete,
+      ...(opts.onDispatched ? { onDispatched: opts.onDispatched } : {}),
+    });
     this.turnQueues.set(sessionId, queue);
     let meta = this.sessionMeta.get(sessionId);
     if (!meta) {
@@ -291,6 +368,49 @@ export class DevinService {
     return true;
   }
 
+  /**
+   * Lane A (W1): targeted removal of ONE queued item.
+   *
+   * The dequeue and this method are both synchronous on the same thread, so
+   * exactly one of `removed` / `dispatched` is returned for an item that exists
+   * — the caller acts on the answer and never infers. `unknown` is reserved for
+   * an item that is not in any queue for that session (deleted session, restart,
+   * wrong id), where neither outcome is provable.
+   *
+   * `removed` is positive proof the message will never execute under that item.
+   */
+  cancelQueuedItem(sessionId: string, itemId: string): QueuedItemCancelOutcome {
+    const queue = this.turnQueues.get(sessionId);
+    const index = queue?.findIndex((item) => item.itemId === itemId) ?? -1;
+    if (queue && index >= 0) {
+      const [removed] = queue.splice(index, 1);
+      if (queue.length === 0) this.turnQueues.delete(sessionId);
+      removed?.onComplete(new DevinQueuedItemCancelled(itemId));
+      return 'removed';
+    }
+    // Not in the queue: either it already left (dispatching/running) or it never
+    // existed here. Only the first is a real answer — never guess the second.
+    if (this.activeQueueItems.get(sessionId)?.has(itemId)) return 'dispatched';
+    return 'unknown';
+  }
+
+  /** Lane A: current state of one queued item, for reconcile and tests. */
+  getQueuedItemState(sessionId: string, itemId: string): 'queued' | 'dispatched' | undefined {
+    const item = this.turnQueues.get(sessionId)?.find((candidate) => candidate.itemId === itemId);
+    if (item) return item.state;
+    return this.activeQueueItems.get(sessionId)?.has(itemId) ? 'dispatched' : undefined;
+  }
+
+  /** Lane A: whether this item is currently waiting (not yet dispatching). */
+  hasQueuedItem(sessionId: string, itemId: string): boolean {
+    return this.getQueuedItemState(sessionId, itemId) === 'queued';
+  }
+
+  /** Lane A: payload-free view of a session's queue (ids and states only). */
+  snapshotQueue(sessionId: string): Array<{ itemId: string; state: 'queued' | 'dispatched' }> {
+    return (this.turnQueues.get(sessionId) ?? []).map((item) => ({ itemId: item.itemId, state: item.state }));
+  }
+
   private drainQueue(sessionId: string): void {
     const queue = this.turnQueues.get(sessionId);
     if (!queue || queue.length === 0) {
@@ -300,24 +420,66 @@ export class DevinService {
     const next = queue.shift();
     if (!next) return;
     if (queue.length === 0) this.turnQueues.delete(sessionId);
-    const entryPromise = this.registry.get(sessionId);
-    void entryPromise.then((entry) => {
+    // Lane A (W1): the hand-over is synchronous. The item is marked dispatched
+    // and the session stays/becomes busy HERE — before any await — so a plain
+    // prompt cannot be admitted into the gap and a targeted cancel can no longer
+    // report "not queued" for an item that is about to execute.
+    next.state = 'dispatched';
+    this.runningSessions.add(sessionId);
+    const dispatchedItems = this.activeQueueItems.get(sessionId) ?? new Set<string>();
+    dispatchedItems.add(next.itemId);
+    this.activeQueueItems.set(sessionId, dispatchedItems);
+    let meta = this.sessionMeta.get(sessionId);
+    if (!meta) {
+      meta = blankMeta();
+      this.sessionMeta.set(sessionId, meta);
+    }
+    meta.status = 'running';
+    const runMeta = meta;
+
+    // Awaited dispatch barrier: the receipt's `started` transition (with its
+    // delivery evidence) is durable BEFORE the prompt reaches the runtime. On
+    // failure the item is failed without executing — never a silent run.
+    void (async () => {
+      if (next.onDispatched) {
+        try {
+          await next.onDispatched();
+        } catch (error) {
+          const cause = error instanceof Error ? error : new Error(String(error));
+          logger.warn('queued follow-up dispatch stamp failed for session %s item %s: %s', sessionId, next.itemId, cause.message);
+          this.runningSessions.delete(sessionId);
+          this.forgetActiveQueueItem(sessionId, next.itemId);
+          meta.status = 'idle';
+          next.onComplete(new DevinDispatchStampError(next.itemId, cause));
+          this.drainQueue(sessionId);
+          return;
+        }
+      }
+      const entry = await this.registry.get(sessionId).catch(() => undefined);
       if (!entry) {
+        this.runningSessions.delete(sessionId);
+        this.forgetActiveQueueItem(sessionId, next.itemId);
         next.onComplete(new Error(`Devin session not found: ${sessionId}`));
+        this.drainQueue(sessionId);
         return;
       }
-      let meta = this.sessionMeta.get(sessionId);
-      if (!meta) {
-        meta = blankMeta();
-        meta.status = 'running';
-        this.sessionMeta.set(sessionId, meta);
-      }
-      meta.status = 'running';
-      this.runningSessions.add(sessionId);
+      runMeta.status = 'running';
       this.promptCallbacks.set(sessionId, { onEvent: next.onEvent, onComplete: next.onComplete });
       void this.registry.updateStatus(sessionId, 'running').catch(() => undefined);
-      void this.runTurn(sessionId, entry, next.prompt, meta, next.onEvent, next.onComplete);
-    }, () => next.onComplete(new Error(`Devin session registry unavailable: ${sessionId}`)));
+      void this.runTurn(sessionId, entry, next.prompt, runMeta, next.onEvent, (err) => {
+        // The dispatched item stops being cancellable once its turn settles.
+        this.forgetActiveQueueItem(sessionId, next.itemId);
+        next.onComplete(err);
+      });
+    })();
+  }
+
+  /** Lane A: drop a dispatched item's cancel-tracking once its turn is over. */
+  private forgetActiveQueueItem(sessionId: string, itemId: string): void {
+    const items = this.activeQueueItems.get(sessionId);
+    if (!items) return;
+    items.delete(itemId);
+    if (items.size === 0) this.activeQueueItems.delete(sessionId);
   }
 
   /** Core turn runner: acquire (or respawn) the session's ACP client, run the
@@ -340,7 +502,13 @@ export class DevinService {
     };
 
     const finalizeRunState = (error?: Error) => {
-      this.runningSessions.delete(sessionId);
+      // Lane A (W1): keep the session marked running while the queue still owes
+      // work, so the hand-over has no window in which the session reads idle and
+      // a plain prompt could be admitted concurrently. `drainQueue` re-marks it
+      // synchronously for the next item and deletes the mark only when the queue
+      // is genuinely empty.
+      const queueStillOwed = (this.turnQueues.get(sessionId)?.length ?? 0) > 0;
+      if (!queueStillOwed) this.runningSessions.delete(sessionId);
       this.promptCallbacks.delete(sessionId);
       meta.lastActivity = Date.now();
       onComplete(error);
@@ -586,9 +754,13 @@ export class DevinService {
     // Review fix 5: abort stops everything pending for this session — queued
     // follow-ups are cleared with an abort error instead of draining as the
     // next turn after the cancellation lands.
+    // Lane A (W1): broad abort semantics are deliberately PRESERVED (status
+    // quo), but each item now reports a typed, item-scoped cancellation so the
+    // route can record `cancelled_before_dispatch` honestly instead of a generic
+    // runtime error. A targeted single-item removal is `cancelQueuedItem`.
     const queued = this.turnQueues.get(sessionId);
     if (queued) {
-      for (const item of queued) item.onComplete(new Error('Devin session aborted; queued follow-up cancelled'));
+      for (const item of queued) item.onComplete(new DevinQueuedItemCancelled(item.itemId, 'session aborted', 'session_abort'));
       this.turnQueues.delete(sessionId);
     }
   }
@@ -597,7 +769,7 @@ export class DevinService {
     this.shutdownProcess(sessionId);
     const queued = this.turnQueues.get(sessionId);
     if (queued) {
-      for (const item of queued) item.onComplete(new Error('Devin session disposed'));
+      for (const item of queued) item.onComplete(new DevinQueuedItemCancelled(item.itemId, 'session disposed', 'session_disposed'));
       this.turnQueues.delete(sessionId);
     }
     this.sessionMeta.delete(sessionId);

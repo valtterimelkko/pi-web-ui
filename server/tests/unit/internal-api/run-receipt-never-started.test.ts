@@ -181,7 +181,13 @@ describe('RunReceiptManager — never-started start window', () => {
       liveness: { watchdog: { reason: 'no_activity', startWindowMs: 5_000, idleTimeoutMs: 900_000 } },
     });
     expect(notice.title).toContain('NEVER_STARTED');
-    expect(notice.body).toMatch(/never started|never began|start window/i);
+    expect(notice.body).toContain('NEVER_STARTED');
+    // Lane A (W1): "no runtime activity of any kind observed" is the honest
+    // claim; the body must not assert quarantine or execution.
+    expect(notice.body).toMatch(/no runtime activity of any kind/i);
     expect(notice.body).not.toMatch(/quarantin/i);
+    // ...and without delivery evidence it must not promise a safe retry.
+    expect(notice.body).toMatch(/unconfirmed/i);
+    expect(notice.body).not.toMatch(/re-dispatch it/i);
   });
 });
