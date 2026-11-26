@@ -61,6 +61,7 @@ const tick = (ms = 3) => new Promise<void>((r) => setTimeout(r, ms));
  *  the floor so it also exercises the clamp — a smaller window would silently
  *  become this one. */
 const IDLE_WINDOW_MS = 1000;
+const TIMER_JITTER_MS = 25;
 /** Generous upper bound for "the child was stopped after the window". */
 const STOP_TIMEOUT_MS = 2500;
 
@@ -355,7 +356,9 @@ describe('devin idle process reaping (lane E)', () => {
     expect(reaps[0]!.msg).toContain(sessionId);
     expect(reaps[0]!.msg).toMatch(/idleMs=\d+/);
     const idleMs = Number(/idleMs=(\d+)/.exec(reaps[0]!.msg)![1]);
-    expect(idleMs).toBeGreaterThanOrEqual(IDLE_WINDOW_MS);
+    // Node timers can fire up to ~1 ms early against Date.now() (CI measured 999 for a 1000 ms window), so the
+    // logged idle duration is checked with a small timer-jitter allowance, not exactly at the window.
+    expect(idleMs).toBeGreaterThanOrEqual(IDLE_WINDOW_MS - TIMER_JITTER_MS);
   });
 
   it('T6: the next prompt after an idle shutdown respawns and resumes the same native session via session/load', async () => {
