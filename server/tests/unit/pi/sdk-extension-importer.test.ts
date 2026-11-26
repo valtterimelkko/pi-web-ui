@@ -196,7 +196,8 @@ describe('B1.2b SDK alias map', () => {
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.5.0' })).toThrow(ExtensionImporterError);
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.5.1' })).toThrow(ExtensionImporterError);
     expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.5.2' })).toThrow(ExtensionImporterError);
-    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.6.0' })).not.toThrow();
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.6.0' })).toThrow(ExtensionImporterError);
+    expect(() => resolveSdkAliasMap({ sdkVersion: () => '1.6.1' })).not.toThrow();
   });
 
   it('degrades as a typed error when an alias target cannot be resolved', () => {
