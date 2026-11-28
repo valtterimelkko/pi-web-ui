@@ -199,6 +199,18 @@ describe('WorktreeManager destructive-operation safety (real temp git repos)', (
     await expect(fs.readFile(path.join(decoy, 'keep.txt'), 'utf8')).resolves.toBe('must survive');
   });
 
+  it('prunes registry state and drops metadata when the worktree directory was already removed', async () => {
+    const repo = await makeIsolatedRepo('manually-removed-repo');
+    const manager = await createWorktreeManager(repo);
+    const wt = await manager.createWorktree({ taskId: 'gone1', baseBranch: 'main', taskDescription: 'already gone', repoPath: repo });
+    await fs.rm(wt.path, { recursive: true, force: true });
+
+    await expect(manager.deleteWorktree(wt.id)).resolves.toBeUndefined();
+
+    expect((manager as unknown as { worktreeMetadata: Map<string, unknown> }).worktreeMetadata.has(wt.id)).toBe(false);
+    await expect(execFileAsync('git', ['rev-parse', '--verify', wt.branch], { cwd: repo })).rejects.toThrow();
+  });
+
   it('detects conflicts read-only with merge-tree and leaves the worktree unchanged', async () => {
     const repo = await makeIsolatedRepo('conflict-readonly-repo');
     const manager = await createWorktreeManager(repo);

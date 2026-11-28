@@ -116,6 +116,7 @@ same host) needs no key.
 | `AUTH_PASSWORD` | password or bcrypt hash |
 | `ALLOWED_ORIGINS` | frontend origins allowed to connect |
 | `PI_WEB_UI_PROXY_KEY_FILE` | path to the shared proxy-key file; required when the fronting proxy connects from a non-loopback address (see "Shared proxy key" above) |
+| `AUTH_SESSION_STATE_PATH` | optional override for the per-user token-generation state file used to keep logout revocation effective across restarts (default: beside `SESSION_REGISTRY_PATH`) |
 
 ### Rate limiting and session hygiene
 

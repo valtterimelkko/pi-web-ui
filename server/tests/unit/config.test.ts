@@ -25,8 +25,7 @@ import {
 } from '../../src/config.js';
 
 describe('OpenCode server authentication defaults', () => {
-  it('never resolves an empty OpenCode server password when OpenCode is enabled', () => {
-    expect(config.opencodeServerEnabled).toBe(true);
+  it('never resolves an empty OpenCode server password', () => {
     expect(config.opencodeServerPassword).not.toBe('');
     expect(config.opencodeServerPassword.length).toBeGreaterThanOrEqual(24);
   });

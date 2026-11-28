@@ -351,40 +351,49 @@ export class WorktreeManager {
     
     // Derive the deletion target only from git's worktree registry. Metadata is
     // mutable local state and must never be trusted as a recursive-delete path.
-    let canonicalTarget: string;
+    let canonicalTarget: string | null = null;
     try {
       canonicalTarget = await fs.realpath(info.path);
-    } catch {
-      throw new Error(`Worktree ${id} path is not canonicalisable against the git worktree registry`);
-    }
-
-    const registryOutput = await git(this.repoPath, 'worktree', 'list', '--porcelain');
-    const registry = parseWorktreePorcelain(registryOutput);
-    let registeredPath: string | null = null;
-    for (const entry of registry) {
-      try {
-        if (await fs.realpath(entry.path) === canonicalTarget) {
-          registeredPath = entry.path;
-          break;
-        }
-      } catch {
-        // Ignore registry entries whose directories have already gone away.
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new Error(`Worktree ${id} path is not canonicalisable against the git worktree registry`);
       }
-    }
-    if (!registeredPath) {
-      throw new Error(`Worktree ${id} path is absent from the canonical git worktree registry`);
-    }
-
-    const repoParent = await fs.realpath(path.dirname(this.repoPath));
-    const relative = path.relative(repoParent, canonicalTarget);
-    if (relative === '' || path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) {
-      throw new Error(`Worktree ${id} registry path escapes the allowed worktree parent`);
-    }
-    if (canonicalTarget === await fs.realpath(this.repoPath)) {
-      throw new Error(`Refusing to remove the primary repository as a worktree`);
+      // The directory is already gone. Pruning updates only git's worktree
+      // registry; unlike the removed recursive-delete fallback it cannot
+      // delete attacker-controlled data. Metadata and branch cleanup below can
+      // then proceed instead of leaving the worktree undeletable.
+      await git(this.repoPath, 'worktree', 'prune');
     }
 
-    await git(this.repoPath, 'worktree', 'remove', registeredPath, '--force');
+    if (canonicalTarget !== null) {
+      const registryOutput = await git(this.repoPath, 'worktree', 'list', '--porcelain');
+      const registry = parseWorktreePorcelain(registryOutput);
+      let registeredPath: string | null = null;
+      for (const entry of registry) {
+        try {
+          if (await fs.realpath(entry.path) === canonicalTarget) {
+            registeredPath = entry.path;
+            break;
+          }
+        } catch {
+          // Ignore registry entries whose directories have already gone away.
+        }
+      }
+      if (!registeredPath) {
+        throw new Error(`Worktree ${id} path is absent from the canonical git worktree registry`);
+      }
+
+      const repoParent = await fs.realpath(path.dirname(this.repoPath));
+      const relative = path.relative(repoParent, canonicalTarget);
+      if (relative === '' || path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) {
+        throw new Error(`Worktree ${id} registry path escapes the allowed worktree parent`);
+      }
+      if (canonicalTarget === await fs.realpath(this.repoPath)) {
+        throw new Error(`Refusing to remove the primary repository as a worktree`);
+      }
+
+      await git(this.repoPath, 'worktree', 'remove', registeredPath, '--force');
+    }
     
     // Delete the branch if requested
     if (deleteBranch) {

@@ -116,6 +116,15 @@ describe('OpenCodeProcessManager', () => {
       );
     });
 
+    it('refuses to spawn over an existing listener that rejects the configured credentials', async () => {
+      vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(new Response(null, { status: 401 }))
+        .mockResolvedValue(new Response(null, { status: 200 }));
+
+      await expect(manager.start()).rejects.toThrow(/existing OpenCode listener|rejecting the configured credentials/i);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
     it('is idempotent - calling twice does not spawn twice', async () => {
       spawnMock.mockImplementationOnce(() => makeDeferredProcess());
       vi.spyOn(globalThis, 'fetch')
