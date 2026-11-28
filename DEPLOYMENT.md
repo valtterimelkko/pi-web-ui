@@ -117,6 +117,7 @@ same host) needs no key.
 | `ALLOWED_ORIGINS` | frontend origins allowed to connect |
 | `PI_WEB_UI_PROXY_KEY_FILE` | path to the shared proxy-key file; required when the fronting proxy connects from a non-loopback address (see "Shared proxy key" above) |
 | `AUTH_SESSION_STATE_PATH` | optional override for the per-user token-generation state file used to keep logout revocation effective across restarts (default: beside `SESSION_REGISTRY_PATH`) |
+| `FILE_UPLOAD_MAX_BYTES` | cap on one uploaded file, enforced for every content type (default `52428800`, 50 MB); empty, invalid or non-positive values fall back to the default |
 
 ### Rate limiting and session hygiene
 

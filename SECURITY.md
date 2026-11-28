@@ -177,6 +177,9 @@ Mitigation:
 - worker/session cleanup rules
 - runtime-specific lifecycle guards
 - pinned-session limits
+- one byte cap on uploaded files for every content type (`FILE_UPLOAD_MAX_BYTES`,
+  default 50 MB), enforced from `Content-Length` and by counting streamed bytes
+  in `server/src/routes/files.ts`
 
 ## Runtime-specific Security Notes
 

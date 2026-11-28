@@ -10,6 +10,98 @@ import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('Files');
 
+// ─── Upload cap ────────────────────────────────────────────────────────────
+
+/** Default cap for one uploaded file: 50 MB. */
+export const DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Resolve the per-file upload cap from its raw env value. Empty, invalid and
+ * non-positive values fall back to the 50 MB default, so a bad env value can
+ * never remove the cap (security review 2026-11-27, finding 6). Never throws.
+ */
+export function resolveUploadMaxBytes(raw: string | undefined): number {
+  const parsed = Number(raw ?? '');
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_MAX_UPLOAD_BYTES;
+}
+
+/** Hard cap applied to every upload, whatever its content type. */
+export const MAX_UPLOAD_BYTES = resolveUploadMaxBytes(process.env.FILE_UPLOAD_MAX_BYTES);
+
+/**
+ * True for the raw file-upload request. Its body must reach the upload route
+ * unparsed: every body parser mounted before the route would consume the stream
+ * (so the route would save an empty file, or reject a .json upload outright).
+ */
+export function isFileUploadRequest(req: Pick<Request, 'method' | 'path'>): boolean {
+  return req.method === 'POST' && req.path === '/api/files/upload';
+}
+
+class UploadTooLargeError extends Error {
+  constructor(limitBytes: number) {
+    super(`File exceeds the ${describeBytes(limitBytes)} upload limit`);
+    this.name = 'UploadTooLargeError';
+  }
+}
+
+function describeBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} bytes`;
+}
+
+/**
+ * Write one uploaded body to `savedPath`, enforcing `limitBytes` whatever the
+ * content type (security review 2026-11-27, finding 6: the old cap belonged to
+ * the application/octet-stream body parser alone, so every other MIME type
+ * streamed to disk unbounded).
+ *
+ * A body already consumed by a body parser (express.raw for
+ * application/octet-stream) arrives as a Buffer and is written directly —
+ * piping the spent request would silently save an empty file. Streamed bodies
+ * are counted byte by byte, so a chunked body with no Content-Length cannot
+ * exceed the cap either. Throws UploadTooLargeError when the cap is exceeded;
+ * the caller unlinks the partial file.
+ */
+async function writeUploadBody(req: Request, savedPath: string, limitBytes: number): Promise<number> {
+  const parsedBody: unknown = req.body;
+  if (Buffer.isBuffer(parsedBody)) {
+    if (parsedBody.length > limitBytes) throw new UploadTooLargeError(limitBytes);
+    await fs.writeFile(savedPath, parsedBody);
+    return parsedBody.length;
+  }
+
+  return await new Promise<number>((resolve, reject) => {
+    const writeStream = createWriteStream(savedPath);
+    let received = 0;
+    let settled = false;
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      req.unpipe(writeStream);
+      writeStream.destroy();
+      reject(error);
+    };
+
+    // Count the bytes that actually arrive: pipe() writes a chunk before this
+    // listener sees it, so an overflowing chunk may reach the file — the caller
+    // unlinks it. Once failed, later chunks are still consumed but discarded.
+    req.on('data', (chunk: Buffer) => {
+      received += chunk.length;
+      if (received > limitBytes) fail(new UploadTooLargeError(limitBytes));
+    });
+    req.on('error', (error: Error) => fail(error));
+    req.on('aborted', () => fail(new Error('Upload aborted by the client')));
+    writeStream.on('error', (error: Error) => fail(error));
+    writeStream.on('finish', () => {
+      if (settled) return;
+      settled = true;
+      resolve(received);
+    });
+    req.pipe(writeStream);
+  });
+}
+
 
 // Upload directory
 const UPLOAD_DIR = '/tmp/pi-uploads';
@@ -281,27 +373,38 @@ router.post('/upload', async (req: Request, res: Response) => {
     const savedName = `${base}-${uniqueId}${ext}`;
     const savedPath = path.join(UPLOAD_DIR, savedName);
 
+    // Enforce the cap before touching the disk (Content-Length is advisory, so
+    // writeUploadBody still counts the bytes it actually receives).
+    const declaredLength = Number(req.headers['content-length']);
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_BYTES) {
+      res.status(413).json({ error: new UploadTooLargeError(MAX_UPLOAD_BYTES).message });
+      return;
+    }
+
     // Ensure upload directory exists
     await fs.mkdir(UPLOAD_DIR, { recursive: true });
 
-    // Stream the request body to file
-    await new Promise<void>((resolve, reject) => {
-      const writeStream = createWriteStream(savedPath);
-      req.on('error', reject);
-      writeStream.on('error', reject);
-      writeStream.on('finish', resolve);
-      req.pipe(writeStream);
-    });
-
-    // Get file size
-    const stat = await fs.stat(savedPath);
+    // Stream the request body to file, counting bytes against the cap for
+    // every content type
+    let size: number;
+    try {
+      size = await writeUploadBody(req, savedPath, MAX_UPLOAD_BYTES);
+    } catch (error) {
+      // Never leave a partial or over-cap file behind
+      await fs.unlink(savedPath).catch(() => undefined);
+      if (error instanceof UploadTooLargeError) {
+        res.status(413).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
 
     res.json({
       success: true,
       path: savedPath,
       name: sanitizedName,
       savedName,
-      size: stat.size,
+      size,
       mimeType: contentType.split(';')[0] || 'application/octet-stream',
     });
   } catch (error) {
