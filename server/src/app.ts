@@ -1,3 +1,4 @@
+import type { IncomingMessage } from 'node:http';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -9,7 +10,7 @@ import { compressionMiddleware } from './middleware/compression.js';
 import authRoutes from './routes/auth.js';
 import sessionsRoutes from './routes/sessions.js';
 import modelsRoutes from './routes/models.js';
-import filesRoutes from './routes/files.js';
+import filesRoutes, { MAX_UPLOAD_BYTES, isFileUploadRequest } from './routes/files.js';
 import extensionsRoutes from './routes/extensions.js';
 import preferencesRoutes from './routes/preferences.js';
 import worktreesRoutes from './routes/worktrees.js';
@@ -80,8 +81,23 @@ export function createApp(
   }));
 
   // Body parsing
-  app.use(express.json());
-  app.use(express.raw({ type: 'application/octet-stream', limit: '50mb' }));
+  // The files upload route is excluded from every body parser: it streams to
+  // disk and counts its own bytes (security review 2026-11-27, finding 6), so
+  // its body must not be buffered here — and must not be spent before the route
+  // can read it (a parser consuming it saves an empty file, or rejects a .json
+  // upload outright). Every other route keeps the same parsers as before, and
+  // raw bodies share the upload route's byte cap.
+  const parserType = (mimeType: string) => (req: IncomingMessage): boolean => {
+    // body-parser types this callback against the bare IncomingMessage; Express
+    // hands it its own Request, which carries `path` and `is()`.
+    const request = req as express.Request;
+    return !isFileUploadRequest(request) && Boolean(request.is(mimeType));
+  };
+  app.use(express.json({ type: parserType('application/json') }));
+  app.use(express.raw({
+    type: parserType('application/octet-stream'),
+    limit: MAX_UPLOAD_BYTES,
+  }));
 
   // Rate limiting — scoped to /api only. Static assets and the SPA fallback
   // must never consume the API budget (2026-08-21 incident: the old global
