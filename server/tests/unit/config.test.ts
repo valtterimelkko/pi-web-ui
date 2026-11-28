@@ -24,6 +24,13 @@ import {
   type LogFormat,
 } from '../../src/config.js';
 
+describe('OpenCode server authentication defaults', () => {
+  it('never resolves an empty OpenCode server password', () => {
+    expect(config.opencodeServerPassword).not.toBe('');
+    expect(config.opencodeServerPassword.length).toBeGreaterThanOrEqual(24);
+  });
+});
+
 describe('positive integer parsing', () => {
   it('accepts positive integers and rejects zero, negatives, fractions, and junk', () => {
     expect(parsePositiveInteger(undefined, 50, 'TEST')).toBe(50);

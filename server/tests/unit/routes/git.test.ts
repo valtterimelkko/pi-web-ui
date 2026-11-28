@@ -187,6 +187,42 @@ describe('Git Routes', () => {
     expect(mockGitService.createBranch).toHaveBeenCalledWith('/root/test', 'new-feature');
   });
 
+  it('POST /api/git/push rejects a leading-dash remote before calling git', async () => {
+    const res = await request(app)
+      .post('/api/git/push')
+      .send({ cwd: '/root/test', remote: '--upload-pack=/tmp/x' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid remote/);
+    expect(mockGitService.push).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/git/push rejects a leading-dash branch before calling git', async () => {
+    const res = await request(app)
+      .post('/api/git/push')
+      .send({ cwd: '/root/test', remote: 'origin', branch: '--force' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid branch/);
+    expect(mockGitService.push).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/git/checkout rejects a leading-dash branch before calling git', async () => {
+    const res = await request(app)
+      .post('/api/git/checkout')
+      .send({ cwd: '/root/test', branch: '--orphan' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid branch/);
+    expect(mockGitService.checkout).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/git/branch rejects a leading-dash name before calling git', async () => {
+    const res = await request(app)
+      .post('/api/git/branch')
+      .send({ cwd: '/root/test', name: '-x' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid branch name/);
+    expect(mockGitService.createBranch).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when service throws', async () => {
     mockGitService.getStatus.mockRejectedValue(new Error('git not found'));
     const res = await request(app).get('/api/git/status?cwd=/root/test');

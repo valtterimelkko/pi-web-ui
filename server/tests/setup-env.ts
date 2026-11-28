@@ -59,6 +59,12 @@ for (const key of Object.keys(process.env)) {
 }
 process.env.PI_TOOLS_RUNTIME_DIR = path.join(tmpdir(), `pi-web-ui-test-placement-${process.pid}-${randomUUID()}`);
 
+// Authentication revocation state is durable app state in production. Unit and
+// integration tests must never write the live file under ~/.pi-web-ui.
+if (!process.env.AUTH_SESSION_STATE_PATH) {
+  process.env.AUTH_SESSION_STATE_PATH = path.join(tmpdir(), `pi-web-ui-test-auth-session-${process.pid}-${randomUUID()}.json`);
+}
+
 // Unit/integration subjects use explicit env fixtures, never a developer's
 // on-disk .env. Keep parse() real for validation-env fixture tests. This does
 // not alter the application loader or source/compiled live-validation mode.

@@ -1,6 +1,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { resolve } from 'path';
+import { realpathSync } from 'fs';
 
 const execFileAsync = promisify(execFile);
 
@@ -43,12 +44,24 @@ export interface GitLogEntry {
 }
 
 function validateCwd(cwd: string): string {
-  const resolved = resolve(cwd);
-  const isAllowed = ALLOWED_DIRS.some(dir => resolved === dir || resolved.startsWith(dir + '/'));
+  let real: string;
+  try {
+    real = realpathSync(resolve(cwd));
+  } catch {
+    throw new Error(`Access denied: ${cwd}`);
+  }
+  const isAllowed = ALLOWED_DIRS.some(dir => {
+    try {
+      const allowedReal = realpathSync(dir);
+      return real === allowedReal || real.startsWith(allowedReal + '/');
+    } catch {
+      return false;
+    }
+  });
   if (!isAllowed) {
     throw new Error(`Access denied: ${cwd}`);
   }
-  return resolved;
+  return real;
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {

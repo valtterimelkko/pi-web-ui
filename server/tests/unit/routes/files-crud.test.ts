@@ -66,6 +66,55 @@ describe('Files CRUD Routes', () => {
       expect(mockWriteFile).toHaveBeenCalledWith('/root/test.txt', 'hello world', 'utf-8');
     });
 
+    it('creates a missing file by validating its canonical parent and basename', async () => {
+      const target = '/root/new-file.txt';
+      mockRealpath.mockImplementation((p: string) => p === target
+        ? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }))
+        : Promise.resolve(p));
+      mockLstat.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+      mockWriteFile.mockResolvedValue(undefined);
+
+      const res = await request(app)
+        .post('/api/files/write')
+        .send({ path: target, content: 'created' });
+
+      expect(res.status).toBe(200);
+      expect(mockWriteFile).toHaveBeenCalledWith(target, 'created', 'utf-8');
+    });
+
+    it('creates a missing file beneath a symlinked allowed parent', async () => {
+      const target = '/root/link-dir/new-file.txt';
+      mockRealpath.mockImplementation((p: string) => {
+        if (p === target) return Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+        if (p === '/root/link-dir') return Promise.resolve('/root/real-dir');
+        return Promise.resolve(p);
+      });
+      mockLstat.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+      mockWriteFile.mockResolvedValue(undefined);
+
+      const res = await request(app)
+        .post('/api/files/write')
+        .send({ path: target, content: 'created' });
+
+      expect(res.status).toBe(200);
+      expect(mockWriteFile).toHaveBeenCalledWith('/root/real-dir/new-file.txt', 'created', 'utf-8');
+    });
+
+    it('refuses a dangling symlink at the target even when the parent is allowed', async () => {
+      const target = '/root/dangling-link.txt';
+      mockRealpath.mockImplementation((p: string) => p === target
+        ? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }))
+        : Promise.resolve(p));
+      mockLstat.mockResolvedValue({ isSymbolicLink: () => true });
+
+      const res = await request(app)
+        .post('/api/files/write')
+        .send({ path: target, content: 'evil' });
+
+      expect(res.status).toBe(400);
+      expect(mockWriteFile).not.toHaveBeenCalled();
+    });
+
     it('rejects path traversal outside allowed dirs', async () => {
       // /etc/passwd does not start with /root → validatePath returns null
       const res = await request(app)

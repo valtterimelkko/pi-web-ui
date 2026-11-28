@@ -116,6 +116,15 @@ describe('OpenCodeProcessManager', () => {
       );
     });
 
+    it('refuses to spawn over an existing listener that rejects the configured credentials', async () => {
+      vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(new Response(null, { status: 401 }))
+        .mockResolvedValue(new Response(null, { status: 200 }));
+
+      await expect(manager.start()).rejects.toThrow(/existing OpenCode listener|rejecting the configured credentials/i);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
     it('is idempotent - calling twice does not spawn twice', async () => {
       spawnMock.mockImplementationOnce(() => makeDeferredProcess());
       vi.spyOn(globalThis, 'fetch')
@@ -246,11 +255,14 @@ describe('OpenCodeProcessManager', () => {
       });
     });
 
-    it('returns empty object when no password', () => {
-      const config = makeConfig({ password: '' });
-      manager = new OpenCodeProcessManager(config);
-      const headers = manager.getAuthHeaders();
-      expect(headers).toEqual({});
+    it('generates a per-manager password when none is configured', () => {
+      const first = new OpenCodeProcessManager(makeConfig({ password: '' }));
+      const second = new OpenCodeProcessManager(makeConfig({ password: '' }));
+      const firstHeaders = first.getAuthHeaders();
+      const secondHeaders = second.getAuthHeaders();
+      expect(firstHeaders.Authorization).toMatch(/^Basic /);
+      expect(secondHeaders.Authorization).toMatch(/^Basic /);
+      expect(firstHeaders.Authorization).not.toBe(secondHeaders.Authorization);
     });
   });
 

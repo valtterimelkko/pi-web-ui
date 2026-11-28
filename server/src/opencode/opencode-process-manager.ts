@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { execSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import { planSpawnOwn, placementForSpawn } from '../placement/index.js';
 import type { OpenCodeConfig } from './opencode-types.js';
@@ -30,7 +31,10 @@ export class OpenCodeProcessManager {
   private attachedExternal: boolean = false;
 
   constructor(config: OpenCodeConfig) {
-    this.config = config;
+    this.config = {
+      ...config,
+      password: config.password || randomBytes(24).toString('base64url'),
+    };
   }
 
   async isAvailable(): Promise<boolean> {
@@ -62,13 +66,20 @@ export class OpenCodeProcessManager {
       throw new Error('OpenCode integration is disabled');
     }
 
-    // If a server is already running at this address, attach to it without spawning
-    const alreadyUp = await this.isHealthy();
-    if (alreadyUp) {
+    // If a server is already running at this address, attach to it without
+    // spawning. A listener that actively rejects our credentials is not safe
+    // to attach to and must fail fast rather than turn into an opaque
+    // EADDRINUSE when a per-run password changes across a crash/restart.
+    const existingProbe = await this.probeHealth();
+    if (existingProbe === 'healthy') {
       logger.info('[OpenCodeProcessManager] Server already running, attaching');
+      this.healthy = true;
       this.serverStartedAt = this.serverStartedAt ?? Date.now();
       this.attachedExternal = true;
       return;
+    }
+    if (existingProbe === 'rejected') {
+      throw new Error(`Existing OpenCode listener at ${this.getBaseUrl()} rejects the configured credentials; refusing to spawn over it`);
     }
 
     const args = ['serve', '--hostname', this.config.host, '--port', String(this.config.port)];
@@ -179,18 +190,23 @@ export class OpenCodeProcessManager {
     });
   }
 
-  async isHealthy(): Promise<boolean> {
+  private async probeHealth(): Promise<'healthy' | 'rejected' | 'unavailable'> {
     try {
       const response = await fetch(this.getBaseUrl(), {
         headers: this.getAuthHeaders(),
         signal: AbortSignal.timeout(2000),
       });
-      this.healthy = response.ok;
-      return this.healthy;
+      if (response.ok) return 'healthy';
+      if (response.status === 401 || response.status === 403) return 'rejected';
+      return 'unavailable';
     } catch {
-      this.healthy = false;
-      return false;
+      return 'unavailable';
     }
+  }
+
+  async isHealthy(): Promise<boolean> {
+    this.healthy = await this.probeHealth() === 'healthy';
+    return this.healthy;
   }
 
   getStatus(): OpenCodeProcessStatus {

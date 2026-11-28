@@ -1,10 +1,14 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { clearBrowserDiagnostics, createBrowserDiagnosticBundle } from '../../../src/lib/browserDiagnostics.js';
 
+const authState = vi.hoisted(() => ({ csrfToken: null as string | null }));
+
 vi.mock('../../../src/hooks/useAuth.js', () => ({
   useAuth: {
-    getState: () => ({ csrfToken: null }),
-    setState: vi.fn(),
+    getState: () => authState,
+    setState: vi.fn((patch: { csrfToken?: string | null }) => {
+      if ('csrfToken' in patch) authState.csrfToken = patch.csrfToken ?? null;
+    }),
   },
 }));
 
@@ -26,12 +30,26 @@ describe('WebSocketClient reconnect lifecycle', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     FakeWebSocket.instances = [];
+    authState.csrfToken = null;
     clearBrowserDiagnostics();
     vi.stubGlobal('WebSocket', FakeWebSocket);
   });
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('re-reads a refreshed CSRF token when the socket opens before sending auth', async () => {
+    const { WebSocketClient } = await import('../../../src/lib/websocket.js');
+    const client = new WebSocketClient({ onMessage: vi.fn(), onStatusChange: vi.fn() });
+    client.connect();
+    authState.csrfToken = 'fresh-csrf-token';
+    const socket = FakeWebSocket.instances[0];
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.onopen?.();
+
+    const sentFrames = socket.send.mock.calls.map((c) => JSON.parse(c[0]));
+    expect(sentFrames[0]).toEqual({ type: 'auth', csrfToken: 'fresh-csrf-token' });
   });
 
   it('does not create a replacement while the current socket is still connecting', async () => {
@@ -80,6 +98,7 @@ describe('WebSocketClient mobile resume durability', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     FakeWebSocket.instances = [];
+    authState.csrfToken = null;
     clearBrowserDiagnostics();
     vi.stubGlobal('WebSocket', FakeWebSocket);
   });
@@ -384,6 +403,7 @@ describe('WebSocketClient resume event listeners', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     FakeWebSocket.instances = [];
+    authState.csrfToken = null;
     clearBrowserDiagnostics();
     vi.stubGlobal('WebSocket', FakeWebSocket);
   });
