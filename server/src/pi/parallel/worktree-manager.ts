@@ -349,20 +349,42 @@ export class WorktreeManager {
     const info = this.worktreeMetadata.get(id);
     if (!info) throw new Error(`Worktree ${id} not found`);
     
-    // Remove the worktree
+    // Derive the deletion target only from git's worktree registry. Metadata is
+    // mutable local state and must never be trusted as a recursive-delete path.
+    let canonicalTarget: string;
     try {
-      await git(this.repoPath, 'worktree', 'remove', info.path, '--force');
+      canonicalTarget = await fs.realpath(info.path);
     } catch {
-      // Try pruning if normal remove fails
-      await git(this.repoPath, 'worktree', 'prune');
-      
-      // Manually remove directory if it still exists
+      throw new Error(`Worktree ${id} path is not canonicalisable against the git worktree registry`);
+    }
+
+    const registryOutput = await git(this.repoPath, 'worktree', 'list', '--porcelain');
+    const registry = parseWorktreePorcelain(registryOutput);
+    let registeredPath: string | null = null;
+    for (const entry of registry) {
       try {
-        await fs.rm(info.path, { recursive: true, force: true });
+        if (await fs.realpath(entry.path) === canonicalTarget) {
+          registeredPath = entry.path;
+          break;
+        }
       } catch {
-        // Directory might not exist
+        // Ignore registry entries whose directories have already gone away.
       }
     }
+    if (!registeredPath) {
+      throw new Error(`Worktree ${id} path is absent from the canonical git worktree registry`);
+    }
+
+    const repoParent = await fs.realpath(path.dirname(this.repoPath));
+    const relative = path.relative(repoParent, canonicalTarget);
+    if (relative === '' || path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) {
+      throw new Error(`Worktree ${id} registry path escapes the allowed worktree parent`);
+    }
+    if (canonicalTarget === await fs.realpath(this.repoPath)) {
+      throw new Error(`Refusing to remove the primary repository as a worktree`);
+    }
+
+    await git(this.repoPath, 'worktree', 'remove', registeredPath, '--force');
     
     // Delete the branch if requested
     if (deleteBranch) {
@@ -472,49 +494,56 @@ export class WorktreeManager {
   async getConflicts(id: string): Promise<ConflictInfo[]> {
     const info = this.worktreeMetadata.get(id);
     if (!info) throw new Error(`Worktree ${id} not found`);
-    
-    // Try a merge --no-commit to detect conflicts
+
+    let mergeHead = info.baseBranch;
     try {
-      await git(info.path, 'merge', '--no-commit', '--no-ff', `origin/${info.baseBranch}`);
-      
-      // If we get here, no conflicts
-      await git(info.path, 'merge', '--abort');
-      return [];
+      await git(info.path, 'rev-parse', '--verify', `origin/${info.baseBranch}`);
+      mergeHead = `origin/${info.baseBranch}`;
     } catch {
-      // Check for conflicted files
-      const status = await git(info.path, 'status', '--porcelain');
-      const conflicts: ConflictInfo[] = [];
-      
-      for (const line of status.split('\n')) {
-        if (line.startsWith('UU') || line.startsWith('AA')) {
-          const filePath = line.slice(3);
-          
-          // Read conflict content
-          try {
-            const content = await fs.readFile(path.join(info.path, filePath), 'utf-8');
-            conflicts.push({
-              file: filePath,
-              type: 'content',
-              oursContent: content,
-            });
-          } catch {
-            conflicts.push({
-              file: filePath,
-              type: 'content',
-            });
-          }
-        }
-      }
-      
-      // Abort the merge
-      try {
-        await git(info.path, 'merge', '--abort');
-      } catch {
-        // Might already be aborted
-      }
-      
-      return conflicts;
+      // Local-only repositories have no origin ref; compare against the local base.
     }
+
+    let stdout = '';
+    let conflicted = false;
+    try {
+      const result = await execFileAsync('git', ['merge-tree', '--write-tree', '--name-only', 'HEAD', mergeHead], {
+        cwd: info.path,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      stdout = result.stdout;
+    } catch (error) {
+      const err = error as { stdout?: string; stderr?: string };
+      if (typeof err.stdout !== 'string' || err.stdout.length === 0) {
+        throw new Error(`Git error: ${err.stderr || 'merge-tree failed'}`);
+      }
+      stdout = err.stdout;
+      conflicted = true;
+    }
+    if (!conflicted) return [];
+
+    const lines = stdout.split('\n');
+    const files: string[] = [];
+    for (const line of lines.slice(1)) {
+      if (!line.trim()) break;
+      files.push(line.trim());
+    }
+
+    const conflicts: ConflictInfo[] = [];
+    for (const filePath of files) {
+      const conflict: ConflictInfo = { file: filePath, type: 'content' };
+      try {
+        conflict.oursContent = await git(info.path, 'show', `HEAD:${filePath}`);
+      } catch {
+        // File may not exist on our side.
+      }
+      try {
+        conflict.theirsContent = await git(info.path, 'show', `${mergeHead}:${filePath}`);
+      } catch {
+        // File may not exist on their side.
+      }
+      conflicts.push(conflict);
+    }
+    return conflicts;
   }
 
   /**
@@ -528,15 +557,12 @@ export class WorktreeManager {
     const info = this.worktreeMetadata.get(id);
     if (!info) throw new Error(`Worktree ${id} not found`);
     
-    // First, commit any uncommitted changes in the worktree
-    try {
-      const status = await git(info.path, 'status', '--porcelain');
-      if (status.length > 0) {
-        await git(info.path, 'add', '-A');
-        await git(info.path, 'commit', '-m', `WIP: ${info.taskDescription}`);
-      }
-    } catch {
-      // Might fail if nothing to commit
+    const dirtyStatus = await git(info.path, 'status', '--porcelain');
+    if (dirtyStatus.length > 0) {
+      return {
+        success: false,
+        message: `Refusing to merge dirty worktree ${id}: commit or discard uncommitted changes first`,
+      };
     }
     
     // Switch to base branch
@@ -561,13 +587,6 @@ export class WorktreeManager {
       } else {
         // Regular merge
         await git(this.repoPath, 'merge', info.branch, '-m', message || `Merge ${info.branch}`);
-      }
-      
-      // Push to remote
-      try {
-        await git(this.repoPath, 'push', 'origin', info.baseBranch);
-      } catch {
-        // Might not have remote
       }
       
       // Update status
@@ -601,6 +620,25 @@ export class WorktreeManager {
         success: false,
         message: `Merge failed with ${conflicts.length} conflicts`,
         conflicts,
+      };
+    }
+  }
+
+  /**
+   * Explicitly publish the base branch after a merge. Publishing is never a
+   * side effect of conflict detection or merging.
+   */
+  async publishBaseBranch(id: string): Promise<{ success: boolean; message: string }> {
+    const info = this.worktreeMetadata.get(id);
+    if (!info) throw new Error(`Worktree ${id} not found`);
+    assertSafeGitRef(info.baseBranch, 'baseBranch');
+    try {
+      await git(this.repoPath, 'push', 'origin', info.baseBranch);
+      return { success: true, message: `Published ${info.baseBranch} to origin` };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Publish failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
       };
     }
   }

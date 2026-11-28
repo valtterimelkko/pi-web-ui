@@ -104,3 +104,127 @@ describe('WorktreeManager — shell-injection neutralised (real temp git repo)',
     await fs.rm(wt.path, { recursive: true, force: true }).catch(() => {});
   });
 });
+
+async function makeIsolatedRepo(name: string): Promise<string> {
+  const repo = path.join(tmpRoot, name);
+  await fs.mkdir(repo, { recursive: true });
+  await gitInit(repo, 'init', '-b', 'main');
+  await gitInit(repo, 'config', 'user.email', 't@t');
+  await gitInit(repo, 'config', 'user.name', 't');
+  await fs.writeFile(path.join(repo, 'README.md'), 'hello\n');
+  await gitInit(repo, 'add', 'README.md');
+  await gitInit(repo, 'commit', '-m', 'init');
+  return repo;
+}
+
+async function installGitWrapper(dir: string, blockedCommand: 'merge' | 'push'): Promise<string> {
+  const marker = path.join(dir, `${blockedCommand}-invoked`);
+  const wrapper = path.join(dir, 'git');
+  await fs.writeFile(wrapper, `#!/bin/sh\nif [ "$1" = "${blockedCommand}" ]; then echo invoked > "${marker}"; fi\nexec /usr/bin/git "$@"\n`);
+  await fs.chmod(wrapper, 0o755);
+  return marker;
+}
+
+describe('WorktreeManager destructive-operation safety (real temp git repos)', () => {
+  it('refuses to merge a dirty worktree instead of creating a WIP commit', async () => {
+    const repo = await makeIsolatedRepo('dirty-merge-repo');
+    const manager = await createWorktreeManager(repo);
+    const wt = await manager.createWorktree({ taskId: 'dirty1', baseBranch: 'main', taskDescription: 'dirty merge', repoPath: repo });
+    await fs.writeFile(path.join(wt.path, 'dirty.txt'), 'uncommitted\n');
+    const before = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: wt.path })).stdout.trim();
+
+    const result = await manager.mergeWorktree(wt.id);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/uncommitted|dirty/i);
+    const after = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: wt.path })).stdout.trim();
+    expect(after).toBe(before);
+  });
+
+  it('does not invoke git push as part of merging a worktree', async () => {
+    const repo = await makeIsolatedRepo('no-push-repo');
+    const manager = await createWorktreeManager(repo);
+    const wt = await manager.createWorktree({ taskId: 'nopush1', baseBranch: 'main', taskDescription: 'no push', repoPath: repo });
+    await fs.writeFile(path.join(wt.path, 'feature.txt'), 'committed\n');
+    await gitInit(wt.path, 'add', 'feature.txt');
+    await gitInit(wt.path, 'commit', '-m', 'feature');
+    const marker = await installGitWrapper(tmpRoot, 'push');
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${tmpRoot}:${oldPath}`;
+    try {
+      const result = await manager.mergeWorktree(wt.id);
+      expect(result.success).toBe(true);
+    } finally {
+      process.env.PATH = oldPath;
+    }
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('publishes the base branch only through the explicit publish call', async () => {
+    const repo = await makeIsolatedRepo('explicit-publish-repo');
+    const remote = path.join(tmpRoot, 'explicit-publish-remote.git');
+    await fs.mkdir(remote, { recursive: true });
+    await gitInit(remote, 'init', '--bare');
+    await gitInit(repo, 'remote', 'add', 'origin', remote);
+    await gitInit(repo, 'push', '-u', 'origin', 'main');
+
+    const manager = await createWorktreeManager(repo);
+    const wt = await manager.createWorktree({ taskId: 'publish1', baseBranch: 'main', taskDescription: 'explicit publish', repoPath: repo });
+    await fs.writeFile(path.join(wt.path, 'published.txt'), 'committed\n');
+    await gitInit(wt.path, 'add', 'published.txt');
+    await gitInit(wt.path, 'commit', '-m', 'publishable feature');
+
+    const merged = await manager.mergeWorktree(wt.id);
+    expect(merged.success).toBe(true);
+    const localMain = (await execFileAsync('git', ['rev-parse', 'main'], { cwd: repo })).stdout.trim();
+    const remoteBefore = (await execFileAsync('git', ['rev-parse', 'main'], { cwd: remote })).stdout.trim();
+    expect(remoteBefore).not.toBe(localMain);
+
+    const published = await manager.publishBaseBranch(wt.id);
+    expect(published.success).toBe(true);
+    const remoteAfter = (await execFileAsync('git', ['rev-parse', 'main'], { cwd: remote })).stdout.trim();
+    expect(remoteAfter).toBe(localMain);
+  });
+
+  it('does not recursively delete a poisoned metadata path that is absent from the git worktree registry', async () => {
+    const repo = await makeIsolatedRepo('poison-delete-repo');
+    const manager = await createWorktreeManager(repo);
+    const wt = await manager.createWorktree({ taskId: 'delete1', baseBranch: 'main', taskDescription: 'safe delete', repoPath: repo });
+    const decoy = path.join(tmpRoot, 'decoy-delete-target');
+    await fs.mkdir(decoy, { recursive: true });
+    await fs.writeFile(path.join(decoy, 'keep.txt'), 'must survive');
+    (manager as unknown as { worktreeMetadata: Map<string, { path: string }> }).worktreeMetadata.get(wt.id)!.path = decoy;
+
+    await expect(manager.deleteWorktree(wt.id)).rejects.toThrow(/registry|not found|canonical/i);
+    await expect(fs.readFile(path.join(decoy, 'keep.txt'), 'utf8')).resolves.toBe('must survive');
+  });
+
+  it('detects conflicts read-only with merge-tree and leaves the worktree unchanged', async () => {
+    const repo = await makeIsolatedRepo('conflict-readonly-repo');
+    const manager = await createWorktreeManager(repo);
+    const wt = await manager.createWorktree({ taskId: 'conflict1', baseBranch: 'main', taskDescription: 'conflict probe', repoPath: repo });
+    await fs.writeFile(path.join(wt.path, 'README.md'), 'worktree\n');
+    await gitInit(wt.path, 'add', 'README.md');
+    await gitInit(wt.path, 'commit', '-m', 'worktree change');
+    await fs.writeFile(path.join(repo, 'README.md'), 'base\n');
+    await gitInit(repo, 'add', 'README.md');
+    await gitInit(repo, 'commit', '-m', 'base change');
+
+    const beforeStatus = (await execFileAsync('git', ['status', '--porcelain'], { cwd: wt.path })).stdout;
+    const beforeFile = await fs.readFile(path.join(wt.path, 'README.md'), 'utf8');
+    const marker = await installGitWrapper(tmpRoot, 'merge');
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${tmpRoot}:${oldPath}`;
+    let conflicts;
+    try {
+      conflicts = await manager.getConflicts(wt.id);
+    } finally {
+      process.env.PATH = oldPath;
+    }
+
+    expect(conflicts.map((c) => c.file)).toContain('README.md');
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await execFileAsync('git', ['status', '--porcelain'], { cwd: wt.path })).stdout).toBe(beforeStatus);
+    await expect(fs.readFile(path.join(wt.path, 'README.md'), 'utf8')).resolves.toBe(beforeFile);
+  });
+});

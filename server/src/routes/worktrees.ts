@@ -404,6 +404,29 @@ router.post('/:id/merge', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * POST /api/worktrees/:id/publish
+ * Explicitly publish the base branch after a successful merge.
+ */
+router.post('/:id/publish', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const repoPath = await resolveRepoPath(req.query.repoPath);
+    const manager = await getManager(repoPath);
+    const result = await manager.publishBaseBranch(id);
+    res.json(result);
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return res.status(400).json({ error: error.message });
+    }
+    logger.error('[Worktrees] Publish error:', error);
+    res.status(500).json({
+      error: 'Failed to publish worktree base branch',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
 // ============= Plan Parsing Endpoints =============
 
 /**

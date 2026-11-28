@@ -232,7 +232,9 @@ export class WebSocketClient {
         this.reconnectAttempts = 0;
         this.startHeartbeat();
 
-        // Send auth message with CSRF token
+        // Re-read the token at open time: a reconnect-time refresh can complete
+        // while the socket is still connecting, after connect() captured state.
+        this.csrfToken = useAuth.getState().csrfToken;
         if (this.csrfToken) {
           this.send({ type: 'auth', csrfToken: this.csrfToken });
         }

@@ -870,7 +870,7 @@ export class WebSocketConnectionManager {
       const client: WebSocketClient = {
         id: clientId,
         ws,
-        isAuthenticated: authResult.success,
+        isAuthenticated: false,
         userId: authResult.user?.userId,
       };
 

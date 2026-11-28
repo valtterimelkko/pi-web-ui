@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import bcrypt from 'bcrypt';
 import { config } from '../config.js';
-import { generateSessionToken } from '../security/auth.js';
+import { generateSessionToken, revokeSessionTokens } from '../security/auth.js';
 import { generateCsrfToken, invalidateCsrfToken } from '../security/csrf.js';
 import { authLimiter } from '../security/rate-limit.js';
 import { validateBody, loginSchema } from '../security/input-validation.js';
@@ -61,8 +61,9 @@ router.post('/login', authLimiter, validateBody(loginSchema), async (req: Reques
   }
 });
 
-router.post('/logout', (req: Request, res: Response) => {
+router.post('/logout', cookieAuthMiddleware, (req: Request, res: Response) => {
   const userId = req.user?.userId ?? 'default-user';
+  revokeSessionTokens(userId);
   invalidateCsrfToken(userId);
 
   res.clearCookie('accessToken', { path: '/' });

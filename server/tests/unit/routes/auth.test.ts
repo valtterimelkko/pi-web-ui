@@ -31,6 +31,35 @@ describe('auth routes', () => {
     });
   });
 
+
+  describe('POST /api/auth/logout token revocation', () => {
+    it('revokes the bearer token server-side so it cannot be replayed after logout', async () => {
+      const originalPassword = config.authPassword;
+      const originalNodeEnv = config.nodeEnv;
+      config.authPassword = 'logout-revocation-test-password';
+      config.nodeEnv = 'development';
+      try {
+        const app = createApp();
+
+        const login = await request(app)
+          .post('/api/auth/login')
+          .send({ password: 'logout-revocation-test-password' })
+          .expect(200);
+        const cookie = (login.headers['set-cookie'] as unknown as string[])
+          .find((value) => value.startsWith('accessToken='));
+        expect(cookie).toBeDefined();
+        const token = cookie!.split(';')[0].split('=')[1];
+
+        await request(app).get('/api/auth/me').set('Cookie', [`accessToken=${token}`]).expect(200);
+        await request(app).post('/api/auth/logout').set('Cookie', [`accessToken=${token}`]).expect(200);
+        await request(app).get('/api/auth/me').set('Cookie', [`accessToken=${token}`]).expect(401);
+      } finally {
+        config.authPassword = originalPassword;
+        config.nodeEnv = originalNodeEnv;
+      }
+    });
+  });
+
   // S5: bcrypt hash backward-compatibility + plaintext-rejection invariants.
   // The hash below was generated with bcrypt 5.1.1 ($2b$) and must keep
   // verifying after the bcrypt 6 upgrade — no plaintext migration, no reduced

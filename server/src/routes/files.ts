@@ -50,31 +50,59 @@ function getAllowedDirectories(): string[] {
   return Array.from(dirs);
 }
 
+async function validateCanonicalPath(real: string): Promise<string | null> {
+  const allowedDirs = getAllowedDirectories();
+  for (const allowed of allowedDirs) {
+    try {
+      const allowedReal = await fs.realpath(allowed);
+      const relative = path.relative(allowedReal, real);
+      if (relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`))) {
+        return real;
+      }
+    } catch {
+      continue;
+    }
+  }
+  logger.warn(`Path validation failed: ${real} not in allowed directories: ${allowedDirs.join(', ')}`);
+  return null;
+}
+
 // Validate path is within allowed directories
 async function validatePath(requestedPath: string): Promise<string | null> {
-  const allowedDirs = getAllowedDirectories();
-  
   try {
     const resolved = path.resolve(requestedPath);
     const real = await fs.realpath(resolved);
-    
-    for (const allowed of allowedDirs) {
-      try {
-        const allowedReal = await fs.realpath(allowed);
-        const relative = path.relative(allowedReal, real);
-        if (relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`))) {
-          return real;
-        }
-      } catch {
-        // Skip allowed dirs that don't exist
-        continue;
-      }
-    }
-    
-    logger.warn(`Path validation failed: ${real} not in allowed directories: ${allowedDirs.join(', ')}`);
-    return null;
+    return await validateCanonicalPath(real);
   } catch (err) {
     logger.warn(`Path validation error for ${requestedPath}:`, err);
+    return null;
+  }
+}
+
+// Validate a write target that may not exist yet. Existing paths keep full
+// realpath validation; missing paths validate the canonical parent and use
+// only their basename. A dangling symlink at the target is never followed.
+async function validateWritePath(requestedPath: string): Promise<string | null> {
+  const resolved = path.resolve(requestedPath);
+  try {
+    const real = await fs.realpath(resolved);
+    return await validateCanonicalPath(real);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+  }
+
+  try {
+    const targetStat = await fs.lstat(resolved);
+    if (targetStat.isSymbolicLink()) return null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+  }
+
+  try {
+    const parentReal = await fs.realpath(path.dirname(resolved));
+    const canonicalParent = await validateCanonicalPath(parentReal);
+    return canonicalParent ? path.join(canonicalParent, path.basename(resolved)) : null;
+  } catch {
     return null;
   }
 }
@@ -290,7 +318,7 @@ router.post('/write', async (req: Request, res: Response) => {
       content: z.string(),
     }).parse(req.body);
 
-    const safePath = await validatePath(filePath);
+    const safePath = await validateWritePath(filePath);
     if (!safePath) {
       res.status(400).json({ error: 'Access denied to this path' });
       return;
