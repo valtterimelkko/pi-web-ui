@@ -219,7 +219,7 @@ Prerequisites:
 | `OPENCODE_ENABLED` | `true` | enable/disable OpenCode |
 | `OPENCODE_SERVER_HOST` | `127.0.0.1` | OpenCode server bind host |
 | `OPENCODE_SERVER_PORT` | `4096` | OpenCode server port |
-| `OPENCODE_SERVER_PASSWORD` | empty | optional basic-auth password for OpenCode server |
+| `OPENCODE_SERVER_PASSWORD` | generated per server run | basic-auth password for the loopback OpenCode server; set a stable strong value only if external tooling must share it |
 | `OPENCODE_WORKING_DIR` | `process.cwd()` | default OpenCode working dir |
 | `OPENCODE_STORAGE_DIR` | `~/.local/share/opencode/storage` | native opencode store read read-only by `GET /api/v1/sessions/native` |
 | `OPENCODE_MAX_SESSIONS` | `4` | max active OpenCode sessions tracked by lifecycle logic |

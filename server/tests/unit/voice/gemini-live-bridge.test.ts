@@ -583,7 +583,7 @@ describe('GeminiLiveBridge context and activity', () => {
   });
 
   it('never logs or emits the provider credential', async () => {
-    const sentinel = 'AIzaSENTINELKEYMATERIAL0000000000000000';
+    const sentinel = 'INVALID_PROVIDER_CREDENTIAL_SENTINEL_DO_NOT_USE';
     const mock = createMockFactory();
     const { callbacks, events } = createCallbacks();
     const logs: string[] = [];

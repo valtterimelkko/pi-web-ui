@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { cookieAuthMiddleware } from '../middleware/auth.js';
 import { gitService } from '../git/git-service.js';
+import { assertSafeGitRef } from '../pi/parallel/worktree-manager.js';
 
 const router = Router();
 router.use(cookieAuthMiddleware);
@@ -107,6 +108,8 @@ router.post('/push', async (req, res) => {
     const { cwd } = CwdSchema.parse(req.body);
     const remote = req.body.remote || 'origin';
     const branch = req.body.branch;
+    assertSafeGitRef(remote, 'remote');
+    if (branch !== undefined) assertSafeGitRef(branch, 'branch');
     const result = await gitService.push(cwd, remote, branch);
     res.json({ success: true, output: result });
   } catch (err: unknown) {
@@ -130,6 +133,7 @@ router.post('/checkout', async (req, res) => {
   try {
     const { cwd } = CwdSchema.parse(req.body);
     const branch = z.string().min(1).parse(req.body.branch);
+    assertSafeGitRef(branch, 'branch');
     await gitService.checkout(cwd, branch);
     res.json({ success: true });
   } catch (err: unknown) {
@@ -142,6 +146,7 @@ router.post('/branch', async (req, res) => {
   try {
     const { cwd } = CwdSchema.parse(req.body);
     const name = z.string().min(1).parse(req.body.name);
+    assertSafeGitRef(name, 'branch name');
     await gitService.createBranch(cwd, name);
     res.json({ success: true });
   } catch (err: unknown) {

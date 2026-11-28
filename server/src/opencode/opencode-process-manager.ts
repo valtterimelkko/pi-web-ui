@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { execSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { applyChildOomScoreAdj } from '../oom-score-adj.js';
 import { planSpawnOwn, placementForSpawn } from '../placement/index.js';
 import type { OpenCodeConfig } from './opencode-types.js';
@@ -30,7 +31,10 @@ export class OpenCodeProcessManager {
   private attachedExternal: boolean = false;
 
   constructor(config: OpenCodeConfig) {
-    this.config = config;
+    this.config = {
+      ...config,
+      password: config.password || randomBytes(24).toString('base64url'),
+    };
   }
 
   async isAvailable(): Promise<boolean> {

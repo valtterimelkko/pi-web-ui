@@ -4,6 +4,7 @@ import { parseBlockedPiProviders } from './internal-api/pi-provider-policy.js';
 import { createHealthTelemetryConfig } from './observability/health-telemetry-config.js';
 import { resolveMemoryJournalPolicyOptions } from './observability/memory-journal-policy.js';
 import os from 'os';
+import { randomBytes } from 'crypto';
 import { MAX_HUMAN_PINNED_SESSIONS_PER_RUNTIME } from '@pi-web-ui/shared';
 
 dotenv.config();
@@ -716,7 +717,7 @@ export const config: ServerConfig = {
   maxClaudeProcesses: parseInt(process.env.MAX_CLAUDE_PROCESSES || '10', 10),
   opencodeServerPort: parseInt(process.env.OPENCODE_SERVER_PORT || '4096', 10),
   opencodeServerHost: process.env.OPENCODE_SERVER_HOST || '127.0.0.1',
-  opencodeServerPassword: process.env.OPENCODE_SERVER_PASSWORD || '',
+  opencodeServerPassword: process.env.OPENCODE_SERVER_PASSWORD || randomBytes(24).toString('base64url'),
   opencodeServerEnabled: process.env.OPENCODE_ENABLED !== 'false',
   opencodeWorkingDir: process.env.OPENCODE_WORKING_DIR || process.cwd(),
   opencodeMaxSessions: parseInt(process.env.OPENCODE_MAX_SESSIONS || '4', 10),
